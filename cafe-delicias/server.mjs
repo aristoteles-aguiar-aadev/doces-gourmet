@@ -80,7 +80,12 @@ export async function createApp(options={}) {
       const session=tokenHash&&(await store.read()).sessions?.[tokenHash];const admin=Boolean(session&&session.expires>now);
       if(path.startsWith('/api/admin/')&&!admin)throw new ShopError('Entre no painel para continuar.',401);
       if(path.startsWith('/api/')&&!['GET','HEAD'].includes(req.method)&&path!=='/api/payments/webhook') {
-        const expected=config.baseUrl?new URL(config.baseUrl).origin:`http://${req.headers.host}`;
+        // Vercel routes each registered alias to this project. Compare against
+        // the actual request host, rather than the canonical payment-return URL.
+        // Forwarded host headers are deliberately not trusted here.
+        const host=req.headers.host;
+        if(serverless&&(typeof host!=='string'||! /^[a-z0-9.-]+(?::\d{1,5})?$/i.test(host)))throw new ShopError('Solicitação não autorizada.',403);
+        const expected=serverless?new URL(`https://${host}`).origin:config.baseUrl?new URL(config.baseUrl).origin:`http://${host}`;
         if(req.headers['x-shop-request']!=='1'||(req.headers.origin&&req.headers.origin!==expected))throw new ShopError('Solicitação não autorizada.',403);
       }
       if(path==='/api/session'&&req.method==='GET')return json({authenticated:admin,paymentsReady:ready(),hosted:serverless});
@@ -92,7 +97,7 @@ export async function createApp(options={}) {
         if(typeof b.password!=='string'||b.password.length>200||!secureEqual(hash(b.password,s.admin.salt),s.admin.hash))throw new ShopError('Senha incorreta.',401);
         const value=randomBytes(32).toString('hex'),sessionKey=createHash('sha256').update(value).digest('hex');
         await store.update(s=>{delete s.loginAttempts?.[addressHash];s.sessions??={};for(const [key,v] of Object.entries(s.sessions))if(v.expires<now)delete s.sessions[key];s.sessions[sessionKey]={expires:now+12*3600000};});
-        res.setHeader('Set-Cookie',`delicias_session=${value}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200${config.baseUrl?.startsWith('https:')?'; Secure':''}`);
+        res.setHeader('Set-Cookie',`delicias_session=${value}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200${serverless||config.baseUrl?.startsWith('https:')?'; Secure':''}`);
         return json({ok:true});
       }
       if(path==='/api/logout'&&req.method==='POST'){if(tokenHash)await store.update(s=>{delete s.sessions?.[tokenHash];});res.setHeader('Set-Cookie','delicias_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0');return json({ok:true});}
