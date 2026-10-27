@@ -22,7 +22,7 @@ export class BlobStore {
       const snapshot=await this.snapshot();if(!snapshot)throw new Error('Banco da loja indisponível.');
       const result=await fn(snapshot.state);const sdk=await this.client();
       try{await sdk.put(this.key,JSON.stringify(snapshot.state),{access:'private',addRandomSuffix:false,allowOverwrite:true,ifMatch:snapshot.etag,contentType:'application/json'});return result;}
-      catch(e){if(e.name!=='BlobPreconditionFailedError')throw e;}
+      catch(e){if(!sdk.BlobPreconditionFailedError||!(e instanceof sdk.BlobPreconditionFailedError))throw e;}
     }
     const error=new Error('A loja recebeu alterações simultâneas. Tente novamente.');error.status=409;throw error;
   }
