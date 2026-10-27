@@ -15,4 +15,6 @@ node server.mjs
 
 Não é necessário instalar dependências. Requer Node.js 20.12 ou superior. Veja [as instruções completas](./cafe-delicias/README.md) para cadastrar produtos, configurar pagamentos e publicar.
 
-**Estado:** aplicação local funcional. Catálogo de demonstração. Pagamentos reais e publicação pública ainda não ativados.
+**Vercel:** o projeto `doces-gourmet` usa `cafe-delicias` como Root Directory, funções Node.js 24 e armazenamento Blob privado. Veja [configuração e acesso administrativo na Vercel](./cafe-delicias/DEPLOY_VERCEL.md).
+
+O catálogo começa em demonstração. Pagamentos reais dependem da configuração Mercado Pago e da revisão dos produtos e dados comerciais.
