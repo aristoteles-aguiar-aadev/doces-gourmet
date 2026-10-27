@@ -59,3 +59,20 @@ test('checkout reserva estoque uma vez, filtra pagamento e exige confirmação a
     payload.key='c'.repeat(32);payload.items[0].quantity=2;assert.equal((await checkout()).status,409);
   }finally{await new Promise(resolve=>app.close(resolve));await rm(directory,{recursive:true,force:true});}
 });
+
+test('sessão administrativa sobrevive a outra instância e logout revoga em ambas',async()=>{
+  const {createApp}=await import('../server.mjs');const directory=await mkdtemp(join(tmpdir(),'delicias-session-'));
+  const a=await createApp({dataDir:directory,adminPassword:'senha-forte-de-teste',quiet:true});
+  await new Promise(resolve=>a.listen(0,'127.0.0.1',resolve));
+  let b;
+  try{
+    const baseA=`http://127.0.0.1:${a.address().port}`;
+    const login=await fetch(baseA+'/api/login',{method:'POST',headers:{'Content-Type':'application/json','X-Shop-Request':'1',Origin:baseA},body:JSON.stringify({password:'senha-forte-de-teste'})});
+    const cookie=login.headers.get('set-cookie').split(';')[0];
+    b=await createApp({dataDir:directory,quiet:true});await new Promise(resolve=>b.listen(0,'127.0.0.1',resolve));const baseB=`http://127.0.0.1:${b.address().port}`;
+    assert.equal((await fetch(baseB+'/api/admin/products',{headers:{Cookie:cookie}})).status,200);
+    const backup=await(await fetch(baseB+'/api/admin/backup',{headers:{Cookie:cookie}})).json();assert.equal(backup.sessions,undefined);assert.equal(backup.loginAttempts,undefined);assert.equal(backup.admin,undefined);
+    await fetch(baseB+'/api/logout',{method:'POST',headers:{Cookie:cookie,'X-Shop-Request':'1',Origin:baseB}});
+    assert.equal((await fetch(baseA+'/api/admin/products',{headers:{Cookie:cookie}})).status,401);
+  }finally{await new Promise(resolve=>a.close(resolve));if(b)await new Promise(resolve=>b.close(resolve));await rm(directory,{recursive:true,force:true});}
+});
