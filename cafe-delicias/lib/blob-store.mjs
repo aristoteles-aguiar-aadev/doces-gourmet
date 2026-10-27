@@ -5,10 +5,21 @@ export class BlobStore {
   constructor({sdk,key='system/loja.json'}={}){this.sdk=sdk;this.key=key;}
   async client(){return this.sdk??=await import('@vercel/blob');}
   async snapshot(){
-    const sdk=await this.client();const result=await sdk.get(this.key,{access:'private',useCache:false});
-    if(!result)return null;
-    if(!result.stream||!result.blob.etag)throw new Error('Armazenamento retornou uma versão inválida.');
-    return {state:JSON.parse(await new Response(result.stream).text()),etag:result.blob.etag};
+    const sdk=await this.client();
+    for(let attempt=0;attempt<10;attempt++){
+      let before;
+      try{before=await sdk.head(this.key);}catch(e){if(sdk.BlobNotFoundError&&e instanceof sdk.BlobNotFoundError)return null;throw e;}
+      const result=await sdk.get(this.key,{access:'private',useCache:false});if(!result)return null;
+      if(!result.stream)throw new Error('Armazenamento retornou uma versão inválida.');
+      const after=await sdk.head(this.key);
+      // The download transport may use a different ETag. The metadata API's
+      // version is authoritative for conditional writes. Bracket the origin
+      // read with metadata checks so content and version belong together.
+      if(before.etag!==after.etag){await result.stream.cancel();continue;}
+      if(!after.etag)throw new Error('Armazenamento retornou uma versão inválida.');
+      return {state:JSON.parse(await new Response(result.stream).text()),etag:after.etag};
+    }
+    throw new Error('O catálogo recebeu alterações simultâneas. Tente novamente.');
   }
   async init(){
     if(await this.snapshot())return;
