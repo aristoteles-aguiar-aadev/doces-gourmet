@@ -4,9 +4,12 @@ import assert from 'node:assert/strict';
 // The test double models the external ETag contract, not application logic.
 function blobService(){
   const objects=new Map();let revision=0;
+  class BlobPreconditionFailedError extends Error {}
+  class BlobAlreadyExistsError extends Error {}
   return {
+    BlobPreconditionFailedError,BlobAlreadyExistsError,
     async get(path,options){assert.equal(options.access,'private');assert.equal(options.useCache,false);const blob=objects.get(path);if(!blob)return null;return {statusCode:200,stream:new Response(blob.body).body,blob:{etag:blob.etag,contentType:blob.type}};},
-    async put(path,body,options){assert.equal(options.access,'private');const previous=objects.get(path);if((previous&&!options.allowOverwrite)||(options.ifMatch&&previous?.etag!==options.ifMatch)){const e=new Error('Conflict');e.name=options.ifMatch?'BlobPreconditionFailedError':'BlobAlreadyExistsError';throw e;}const etag=String(++revision);objects.set(path,{body:typeof body==='string'?body:Buffer.from(body),etag,type:options.contentType});return {etag};}
+    async put(path,body,options){assert.equal(options.access,'private');const previous=objects.get(path);if((previous&&!options.allowOverwrite)||(options.ifMatch&&previous?.etag!==options.ifMatch)){throw options.ifMatch?new BlobPreconditionFailedError('Conflict'):new BlobAlreadyExistsError('Conflict');}const etag=String(++revision);objects.set(path,{body:typeof body==='string'?body:Buffer.from(body),etag,type:options.contentType});return {etag};}
   };
 }
 test('Blob privado preserva gravações concorrentes de instâncias diferentes',async()=>{
