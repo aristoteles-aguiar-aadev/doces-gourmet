@@ -4,6 +4,7 @@ import {mkdtemp,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createHmac} from 'node:crypto';
+import {request as httpRequest} from 'node:http';
 
 test('API protege painel, persiste produto e não inventa pagamento sem credencial',async()=>{
   const {createApp}=await import('../server.mjs');
@@ -75,4 +76,25 @@ test('sessão administrativa sobrevive a outra instância e logout revoga em amb
     await fetch(baseB+'/api/logout',{method:'POST',headers:{Cookie:cookie,'X-Shop-Request':'1',Origin:baseB}});
     assert.equal((await fetch(baseA+'/api/admin/products',{headers:{Cookie:cookie}})).status,401);
   }finally{await new Promise(resolve=>a.close(resolve));if(b)await new Promise(resolve=>b.close(resolve));await rm(directory,{recursive:true,force:true});}
+});
+
+test('login Vercel aceita aliases do próprio site e continua bloqueando outras origens',async()=>{
+  const {createApp}=await import('../server.mjs');const {FileStore}=await import('../lib/store.mjs');
+  const directory=await mkdtemp(join(tmpdir(),'delicias-alias-'));
+  const app=await createApp({serverless:true,store:new FileStore(directory),baseUrl:'https://cafesdelicias.vercel.app',adminPassword:'senha-forte-de-teste',quiet:true});
+  await new Promise(resolve=>app.listen(0,'127.0.0.1',resolve));const base=`http://127.0.0.1:${app.address().port}`;
+  const login=(host,origin,extra={})=>new Promise((resolve,reject)=>{
+    const req=httpRequest(base+'/api/login',{method:'POST',headers:{Host:host,Origin:origin,'Content-Type':'application/json','X-Shop-Request':'1',...extra}},res=>{
+      res.resume();res.on('end',()=>resolve({status:res.statusCode,cookie:res.headers['set-cookie']?.[0]}));
+    });req.on('error',reject);req.end(JSON.stringify({password:'senha-forte-de-teste'}));
+  });
+  try{
+    for(const host of ['cafesdelicias.vercel.app','doces-gourmet-aristoteles-aguiars-projects.vercel.app']){
+      const response=await login(host,`https://${host}`);assert.equal(response.status,200,host);assert.match(response.cookie,/; Secure/);
+    }
+    assert.equal((await login('cafesdelicias.vercel.app','https://outro.example')).status,403);
+    assert.equal((await login('cafesdelicias.vercel.app','https://outro.example',{'X-Forwarded-Host':'outro.example'})).status,403);
+    assert.equal((await login('cafesdelicias.vercel.app','https://cafesdelicias.vercel.app',{'X-Shop-Request':''})).status,403);
+    assert.equal((await login('cafesdelicias.vercel.app','null')).status,403);
+  }finally{await new Promise(resolve=>app.close(resolve));await rm(directory,{recursive:true,force:true});}
 });
