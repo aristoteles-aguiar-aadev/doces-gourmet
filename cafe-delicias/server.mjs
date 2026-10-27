@@ -4,28 +4,39 @@ import {join,dirname,extname} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {randomBytes,randomUUID,scryptSync,timingSafeEqual,createHmac,createHash} from 'node:crypto';
 import {FileStore} from './lib/store.mjs';
+import {BlobStore} from './lib/blob-store.mjs';
 import {ShopError,text,validateProduct,quote,customerInput,categories} from './lib/shop.mjs';
 
 const root=dirname(fileURLToPath(import.meta.url));
-const secureEqual=(a,b)=>typeof a==='string'&&typeof b==='string'&&a.length===b.length&&timingSafeEqual(Buffer.from(a),Buffer.from(b));
+const secureEqual=(a,b)=>typeof a==='string'&&typeof b==='string'&&Buffer.byteLength(a)===Buffer.byteLength(b)&&timingSafeEqual(Buffer.from(a),Buffer.from(b));
 const hash=(p,s)=>scryptSync(p,s,64).toString('hex');
 const publicOrder=o=>({id:o.id,createdAt:o.createdAt,status:o.status,fulfillment:o.fulfillment,items:o.items,subtotal:o.subtotal,deliveryFee:o.deliveryFee,total:o.total,method:o.method,checkoutUrl:o.checkoutUrl||null});
 
 export async function createApp(options={}) {
-  const config={dataDir:process.env.DATA_DIR||join(root,'data'),adminPassword:process.env.ADMIN_PASSWORD,accessToken:process.env.MP_ACCESS_TOKEN,webhookSecret:process.env.MP_WEBHOOK_SECRET,baseUrl:process.env.PUBLIC_BASE_URL,...options};
-  const store=new FileStore(config.dataDir);await store.init();
+  const serverless=options.serverless??Boolean(process.env.VERCEL);
+  const origin=process.env.PUBLIC_BASE_URL||(process.env.VERCEL_PROJECT_PRODUCTION_URL?`https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`:undefined);
+  const config={dataDir:process.env.DATA_DIR||join(root,'data'),adminPassword:process.env.ADMIN_PASSWORD,accessToken:process.env.MP_ACCESS_TOKEN,webhookSecret:process.env.MP_WEBHOOK_SECRET,baseUrl:origin,...options};
+  if(config.baseUrl)config.baseUrl=new URL(config.baseUrl).origin;
+  const store=options.store||(serverless?new BlobStore():new FileStore(config.dataDir));await store.init();
   // One server process owns this file store. A second process must never write it.
-  const sessions=new Map(),attempts=new Map(),requestLimits=new Map(),checkoutFlights=new Map();
-  let adminPassword=config.adminPassword;
-  await store.update(async s=>{
-    if(!s.admin||adminPassword) {
-      adminPassword=adminPassword||randomBytes(18).toString('base64url');
-      if(adminPassword.length<12) throw new Error('ADMIN_PASSWORD precisa ter pelo menos 12 caracteres.');
-      const salt=randomBytes(24).toString('hex');s.admin={salt,hash:hash(adminPassword,salt)};
-      if(!config.adminPassword) await writeFile(join(config.dataDir,'acesso-admin.txt'),`Acesso ao painel /admin\nSenha: ${adminPassword}\nGuarde este arquivo em local seguro.\n`,{mode:0o600});
+  const requestLimits=new Map(),checkoutFlights=new Map();
+  const current=await store.read();
+  if(!current.admin||(config.adminPassword&&!secureEqual(hash(config.adminPassword,current.admin.salt),current.admin.hash))){
+    const password=config.adminPassword||randomBytes(18).toString('base64url');
+    if(password.length<12)throw new Error('ADMIN_PASSWORD precisa ter pelo menos 12 caracteres.');
+    const salt=randomBytes(24).toString('hex');
+    const created=await store.update(s=>{
+      if(s.admin&&!config.adminPassword)return false;
+      if(s.admin&&secureEqual(hash(password,s.admin.salt),s.admin.hash))return false;
+      s.admin={salt,hash:hash(password,salt)};s.sessions={};return true;
+    });
+    if(created&&!config.adminPassword){
+      const content=`Acesso ao painel /admin\nSenha: ${password}\nGuarde este arquivo em local seguro.\n`;
+      if(serverless)await store.saveAsset('system/acesso-admin.txt',content,'text/plain');
+      else await writeFile(join(config.dataDir,'acesso-admin.txt'),content,{mode:0o600});
     }
-  });
-  if(!options.quiet) console.log(`Painel: /admin · ${adminPassword&&!config.adminPassword?'senha inicial salva em data/acesso-admin.txt':'use a senha configurada; senha inicial, se gerada, em data/acesso-admin.txt'}`);
+  }
+  if(!options.quiet)console.log(serverless?'Painel /admin: acesso inicial no Blob privado system/acesso-admin.txt.':'Painel /admin: use a senha configurada ou consulte data/acesso-admin.txt.');
   const ready=()=>Boolean(config.accessToken&&config.webhookSecret&&/^https:\/\//.test(config.baseUrl||''));
   async function mp(path,init={}) {
     const response=await (options.paymentFetch||fetch)(`https://api.mercadopago.com${path}`,{...init,headers:{Authorization:`Bearer ${config.accessToken}`,'Content-Type':'application/json',...init.headers},signal:AbortSignal.timeout(20000)});
@@ -48,6 +59,7 @@ export async function createApp(options={}) {
     });
   }
   async function body(req,max=3000000) {
+    if(req.body!==undefined){const data=typeof req.body==='string'?req.body:JSON.stringify(req.body);if(Buffer.byteLength(data)>max)throw new ShopError('Solicitação muito grande.',413);try{return JSON.parse(data);}catch{throw new ShopError('Dados inválidos.');}}
     let size=0;const chunks=[];
     for await(const chunk of req){size+=chunk.length;if(size>max)throw new ShopError('Arquivo ou solicitação muito grande.',413);chunks.push(chunk);}
     try{return JSON.parse(Buffer.concat(chunks).toString()||'{}');}catch{throw new ShopError('Dados inválidos.');}
@@ -58,33 +70,32 @@ export async function createApp(options={}) {
     res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'");
     try {
       const url=new URL(req.url,'http://localhost'),path=url.pathname;
-      const client=req.socket.remoteAddress,now=Date.now();
+      const client=serverless?String(req.headers['x-vercel-forwarded-for']||req.headers['x-forwarded-for']||'unknown').split(',')[0].trim():req.socket.remoteAddress,now=Date.now();
       if(requestLimits.size>10000)requestLimits.clear();
       const rate=requestLimits.get(client)||{time:now,count:0};if(now-rate.time>60000){rate.time=now;rate.count=0;}requestLimits.set(client,rate);
       if(++rate.count>300)throw new ShopError('Muitas solicitações. Aguarde um minuto.',429);
       const cookies=String(req.headers.cookie||'').split(';').map(c=>c.trim().split('='));
       const token=cookies.find(([k])=>k==='delicias_session')?.[1];
-      const session=token&&sessions.get(token);const admin=Boolean(session&&session.expires>now);
-      if(token&&!admin)sessions.delete(token);
+      const tokenHash=token&&createHash('sha256').update(token).digest('hex');
+      const session=tokenHash&&(await store.read()).sessions?.[tokenHash];const admin=Boolean(session&&session.expires>now);
       if(path.startsWith('/api/admin/')&&!admin)throw new ShopError('Entre no painel para continuar.',401);
       if(path.startsWith('/api/')&&!['GET','HEAD'].includes(req.method)&&path!=='/api/payments/webhook') {
         const expected=config.baseUrl?new URL(config.baseUrl).origin:`http://${req.headers.host}`;
         if(req.headers['x-shop-request']!=='1'||(req.headers.origin&&req.headers.origin!==expected))throw new ShopError('Solicitação não autorizada.',403);
       }
-      if(path==='/api/session'&&req.method==='GET')return json({authenticated:admin,paymentsReady:ready()});
+      if(path==='/api/session'&&req.method==='GET')return json({authenticated:admin,paymentsReady:ready(),hosted:serverless});
       if(path==='/api/login'&&req.method==='POST'){
-        if(attempts.size>10000)attempts.clear();
-        const a=attempts.get(client)||{time:now,count:0};if(now-a.time>900000){a.count=0;a.time=now;}
-        attempts.set(client,a);if(++a.count>8)throw new ShopError('Muitas tentativas. Aguarde 15 minutos.',429);
+        const addressHash=createHash('sha256').update(client||'unknown').digest('hex');
+        const allowed=await store.update(s=>{s.loginAttempts??={};for(const [key,a] of Object.entries(s.loginAttempts))if(now-a.time>900000)delete s.loginAttempts[key];const a=s.loginAttempts[addressHash]??={time:now,count:0};return ++a.count<=8;});
+        if(!allowed)throw new ShopError('Muitas tentativas. Aguarde 15 minutos.',429);
         const b=await body(req,2000);const s=await store.read();
         if(typeof b.password!=='string'||b.password.length>200||!secureEqual(hash(b.password,s.admin.salt),s.admin.hash))throw new ShopError('Senha incorreta.',401);
-        attempts.delete(client);
-        const value=randomBytes(32).toString('hex');sessions.set(value,{expires:now+12*3600000});
-        for(const [k,v] of sessions)if(v.expires<now)sessions.delete(k);
+        const value=randomBytes(32).toString('hex'),sessionKey=createHash('sha256').update(value).digest('hex');
+        await store.update(s=>{delete s.loginAttempts?.[addressHash];s.sessions??={};for(const [key,v] of Object.entries(s.sessions))if(v.expires<now)delete s.sessions[key];s.sessions[sessionKey]={expires:now+12*3600000};});
         res.setHeader('Set-Cookie',`delicias_session=${value}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200${config.baseUrl?.startsWith('https:')?'; Secure':''}`);
         return json({ok:true});
       }
-      if(path==='/api/logout'&&req.method==='POST'){sessions.delete(token);res.setHeader('Set-Cookie','delicias_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0');return json({ok:true});}
+      if(path==='/api/logout'&&req.method==='POST'){if(tokenHash)await store.update(s=>{delete s.sessions?.[tokenHash];});res.setHeader('Set-Cookie','delicias_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0');return json({ok:true});}
       if(path==='/api/catalog'&&req.method==='GET'){
         const s=await store.read();return json({products:s.products.filter(p=>p.active),settings:s.settings,categories,paymentsReady:ready()});
       }
@@ -108,7 +119,10 @@ export async function createApp(options={}) {
         else if(bytes.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10])))ext='png';
         else if(bytes.toString('ascii',0,4)==='RIFF'&&bytes.toString('ascii',8,12)==='WEBP')ext='webp';
         if(!ext||bytes.length>3000000)throw new ShopError('Envie JPG, PNG ou WebP com até 3 MB.');
-        const filename=`${randomUUID()}.${ext}`;await mkdir(join(config.dataDir,'uploads'),{recursive:true});await writeFile(join(config.dataDir,'uploads',filename),bytes);return json({url:`/uploads/${filename}`},201);
+        const filename=`${randomUUID()}.${ext}`;
+        if(serverless)await store.saveAsset(`uploads/${filename}`,bytes,{'jpg':'image/jpeg','png':'image/png','webp':'image/webp'}[ext]);
+        else{await mkdir(join(config.dataDir,'uploads'),{recursive:true});await writeFile(join(config.dataDir,'uploads',filename),bytes);}
+        return json({url:`/uploads/${filename}`},201);
       }
       if(path==='/api/admin/settings'){
         if(req.method==='GET')return json({settings:(await store.read()).settings,paymentsReady:ready()});
@@ -130,7 +144,7 @@ export async function createApp(options={}) {
         for(const p of list)await reconcile(p.id);return json({ok:true});
       }
       if(path==='/api/admin/backup'&&req.method==='GET'){
-        const {admin,...data}=await store.read();res.setHeader('Content-Disposition','attachment; filename="backup-delicias.json"');return json(data);
+        const {admin,sessions,loginAttempts,...data}=await store.read();res.setHeader('Content-Disposition','attachment; filename="backup-delicias.json"');return json(data);
       }
       if(path==='/api/checkout'&&req.method==='POST'){
         if(!ready())throw new ShopError('Os pagamentos ainda não foram ativados pela loja. Nenhuma cobrança foi realizada.',503);
@@ -195,7 +209,7 @@ export async function createApp(options={}) {
       let filename=allowed.has(path)?join(root,'public',allowed.get(path)):null;
       if(/^\/uploads\/[a-f0-9-]+\.(jpg|png|webp)$/.test(path))filename=join(config.dataDir,path.slice(1));
       if(!filename)throw new ShopError('Página não encontrada.',404);
-      let content;try{content=await readFile(filename);}catch(e){if(e.code==='ENOENT')throw new ShopError('Arquivo não encontrado.',404);throw e;}
+      let content;try{content=serverless&&path.startsWith('/uploads/')?await store.readAsset(path.slice(1)):await readFile(filename);if(!content)throw new ShopError('Arquivo não encontrado.',404);}catch(e){if(e.code==='ENOENT')throw new ShopError('Arquivo não encontrado.',404);throw e;}
       const types={'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.js':'text/javascript; charset=utf-8','.jpeg':'image/jpeg','.jpg':'image/jpeg','.png':'image/png','.webp':'image/webp','.svg':'image/svg+xml'};
       res.writeHead(200,{'Content-Type':types[extname(filename)],'Cache-Control':path.startsWith('/uploads/')?'public, max-age=86400':'no-cache'});res.end(req.method==='HEAD'?undefined:content);
     }catch(e){if(!res.headersSent)json({error:e instanceof ShopError?e.message:'Ocorreu um erro. Tente novamente.'},e.status||500);else res.end();if(!(e instanceof ShopError)&&!options.quiet)console.error('Falha interna:',e.code||e.name);}

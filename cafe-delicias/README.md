@@ -1,6 +1,8 @@
 # Café & Delícias — Mãe e Filha
 
-Loja responsiva com catálogo, pesquisa, categorias, ordenação, detalhes dos produtos, alergênicos, sacola persistente, checkout e painel administrativo. Feita com HTML, CSS, JavaScript e Node.js nativo, sem pacotes externos.
+Loja responsiva com catálogo, pesquisa, categorias, ordenação, detalhes dos produtos, alergênicos, sacola persistente, checkout e painel administrativo. Feita com HTML, CSS, JavaScript e Node.js. A execução local usa o Node nativo; a Vercel usa `@vercel/blob` para persistência privada.
+
+**Publicação na Vercel:** veja [DEPLOY_VERCEL.md](./DEPLOY_VERCEL.md) para armazenamento, primeiro acesso e variáveis de produção. As instruções de disco abaixo se aplicam ao servidor local.
 
 ## Rodar
 
@@ -53,7 +55,7 @@ Pedidos abandonados ou com tentativa rejeitada **mantêm o estoque reservado** p
 
 Esta aplicação precisa de hospedagem que execute Node.js, disco/volume persistente e um único processo. Use um proxy HTTPS na frente do servidor; configure `HOST=0.0.0.0` apenas no ambiente de hospedagem, a origem pública exata e um volume privado em `DATA_DIR`. O proxy deve preservar o cabeçalho `Origin`. Não há autenticação baseada em cabeçalhos de identidade externos nesta edição; o painel usa senha e cookie de sessão próprio.
 
-O projeto Sites reservado em `.openai/hosting.json` **não foi publicado**. O ambiente bloqueou o download do framework necessário ao backend Cloudflare. O aplicativo Node local não pode ser enviado como Worker sem adaptar armazenamento e autenticação. Não há link de produção funcional nesta entrega; não envie o catálogo a clientes como loja pronta para receber pagamentos.
+A publicação na **Vercel** usa a entrada `api/index.mjs`, os roteamentos em `vercel.json` e armazenamento privado compartilhado. Configure o Root Directory como `cafe-delicias`. O identificador Sites em `.openai/hosting.json` é de uma tentativa anterior e não participa da publicação Vercel. Consulte [DEPLOY_VERCEL.md](./DEPLOY_VERCEL.md).
 
 ## Verificações
 

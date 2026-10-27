@@ -1,0 +1,9 @@
+data
+.env
+.env.*
+!.env.example
+.openai
+tests
+outputs
+.sites-runtime
+node_modules
