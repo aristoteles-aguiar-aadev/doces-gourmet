@@ -38,4 +38,4 @@ document.addEventListener('click',async e=>{
   const sync=e.target.closest('[data-sync]');if(sync){sync.disabled=true;try{await api(`/api/admin/orders/${sync.dataset.sync}/sync`,{method:'POST',body:'{}'});await orders();toast('Status consultado no Mercado Pago.');}catch(e){toast(e.message);sync.disabled=false;}}
 });
 $('#photo-preview').onerror=()=>{$('#photo-preview').src='/marca.jpeg';};
-api('/api/session').then(s=>{if(s.authenticated)return dashboard();}).catch(e=>error('#login-error',e));
+api('/api/session').then(s=>{if(s.hosted)$('#first-access-note').textContent='Primeiro acesso? Consulte o arquivo system/acesso-admin.txt no armazenamento privado da sua conta Vercel, ou use a senha definida nas configurações da hospedagem.';if(s.authenticated)return dashboard();}).catch(e=>error('#login-error',e));
