@@ -133,7 +133,7 @@ export async function createApp(options={}) {
         if(req.method==='GET')return json({settings:(await store.read()).settings,paymentsReady:ready()});
         if(req.method==='PUT'){
           const b=await body(req);if(!Number.isSafeInteger(b.deliveryFee)||b.deliveryFee<0||b.deliveryFee>100000)throw new ShopError('Taxa de entrega inválida.');
-          const settings={storeName:'Café & Delícias',tagline:'Mãe e Filha',deliveryEnabled:b.deliveryEnabled===true,deliveryFee:b.deliveryFee,deliveryArea:text(b.deliveryArea||'',0,200,'Área de entrega'),pickupAddress:text(b.pickupAddress||'',0,300,'Retirada'),hours:text(b.hours||'',0,200,'Horário'),whatsapp:String(b.whatsapp||'').replace(/\D/g,''),catalogExample:b.catalogExample===true};
+          const settings={storeName:'Dois Amores Doceria',tagline:'Mãe e Filha',deliveryEnabled:b.deliveryEnabled===true,deliveryFee:b.deliveryFee,deliveryArea:text(b.deliveryArea||'',0,200,'Área de entrega'),pickupAddress:text(b.pickupAddress||'',0,300,'Retirada'),hours:text(b.hours||'',0,200,'Horário'),whatsapp:String(b.whatsapp||'').replace(/\D/g,''),catalogExample:b.catalogExample===true};
           if(settings.deliveryEnabled&&!settings.deliveryArea)throw new ShopError('Informe os bairros ou a região atendida.');
           if(settings.whatsapp&&!/^\d{10,13}$/.test(settings.whatsapp))throw new ShopError('WhatsApp inválido.');
           await store.update(s=>{s.settings=settings;});return json({ok:true});
@@ -230,7 +230,7 @@ if(process.argv[1]&&fileURLToPath(import.meta.url)===fileURLToPath(new URL(`file
   catch{console.error('Já existe um servidor usando este banco. Se ele foi encerrado de forma abrupta, remova data/.server.lock antes de reiniciar.');process.exit(1);}
   const app=await createApp();const port=Number(process.env.PORT||3180),host=process.env.HOST||'127.0.0.1';
   app.on('error',async error=>{await lock.close();const {unlink}=await import('node:fs/promises');await unlink(join(dataDir,'.server.lock')).catch(()=>{});console.error(error.code==='EADDRINUSE'?`A porta ${port} está em uso. Configure PORT com outra porta no arquivo .env.`:`Não foi possível iniciar o servidor: ${error.code}`);process.exit(1);});
-  app.listen(port,host,()=>console.log(`Café & Delícias: http://${host}:${port}`));
+  app.listen(port,host,()=>console.log(`Dois Amores Doceria: http://${host}:${port}`));
   const stop=async()=>{app.close();await lock.close();const {unlink}=await import('node:fs/promises');await unlink(join(dataDir,'.server.lock')).catch(()=>{});process.exit(0);};
   process.on('SIGINT',stop);process.on('SIGTERM',stop);
 }

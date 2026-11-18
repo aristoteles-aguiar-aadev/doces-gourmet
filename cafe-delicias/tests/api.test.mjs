@@ -26,7 +26,7 @@ test('API protege painel, persiste produto e não inventa pagamento sem credenci
     const checkout=await call('/api/checkout',{items:[{id,quantity:1}],fulfillment:'pickup',name:'Maria Silva',email:'maria@example.com',phone:'85999999999',method:'pix',key:'a'.repeat(32)});
     assert.equal(checkout.status,503);
     const orders=await(await call('/api/admin/orders',null,cookie)).json();assert.equal(orders.orders.length,0);
-    const home=await fetch(base+'/');assert.equal(home.status,200);assert.match(await home.text(),/Café/);
+    const home=await fetch(base+'/');assert.equal(home.status,200);assert.match(await home.text(),/Dois Amores Doceria/);
     assert.equal((await fetch(base+'/data/loja.json')).status,404);
   }finally{await new Promise(resolve=>app.close(resolve));await rm(directory,{recursive:true,force:true});}
 });

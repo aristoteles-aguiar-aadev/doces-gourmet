@@ -1,7 +1,7 @@
 const image=(id)=>`https://images.unsplash.com/${id}?auto=format&fit=crop&w=850&q=85`;
 export const initialState=()=>({
   version:1,admin:null,orders:[],
-  settings:{storeName:'Café & Delícias',tagline:'Mãe e Filha',deliveryEnabled:false,deliveryFee:800,deliveryArea:'',pickupAddress:'',hours:'',whatsapp:'',catalogExample:true},
+  settings:{storeName:'Dois Amores Doceria',tagline:'Mãe e Filha',deliveryEnabled:false,deliveryFee:800,deliveryArea:'',pickupAddress:'',hours:'',whatsapp:'',catalogExample:true},
   products:[
     {id:'brigadeiro',name:'Brigadeiro belga',description:'Chocolate intenso, textura cremosa e um carinho em cada bolinha.',category:'Brigadeiros',price:450,stock:30,unit:'unidade',image:image('photo-1511381939415-e440154668e4'),active:true,featured:true,allergens:'Contém leite. Pode conter soja e castanhas.'},
     {id:'bolo-morango',name:'Bolo de morango',description:'Massa fofinha, creme delicado e morangos frescos. Uma fatia de felicidade.',category:'Bolos & fatias',price:1890,stock:12,unit:'fatia',image:image('photo-1464305795204-6f5bbfc7fb81'),active:true,featured:true,allergens:'Contém glúten, ovos e leite.'},

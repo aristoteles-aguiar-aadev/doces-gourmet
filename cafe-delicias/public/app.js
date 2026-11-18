@@ -8,7 +8,7 @@ function toast(message){$('#toast').textContent=message;$('#toast').hidden=false
 function saveCart(){try{localStorage.setItem('delicias-cart-v1',JSON.stringify(cart));}catch{}checkoutKey=crypto.randomUUID();updateCount();}
 function updateCount(){const n=cart.reduce((n,i)=>n+i.quantity,0);$('#cart-count').textContent=n;$('#open-cart').setAttribute('aria-label',`Abrir sacola, ${n} ${n===1?'item':'itens'}`);}
 async function api(path,options={}){const r=await fetch(path,{...options,headers:{'Content-Type':'application/json','X-Shop-Request':'1',...options.headers}});let data;try{data=await r.json();}catch{throw new Error('Não foi possível acessar a loja. Tente novamente.');}if(!r.ok)throw new Error(data.error||'Não foi possível continuar.');return data;}
-function imageFallback(img){img.addEventListener('error',()=>{if(!img.src.endsWith('/marca.jpeg')){img.src='/marca.jpeg';img.alt='Café & Delícias — imagem ilustrativa';}},{once:true});}
+function imageFallback(img){img.addEventListener('error',()=>{if(!img.src.endsWith('/marca.jpeg')){img.src='/marca.jpeg';img.alt='Dois Amores Doceria — imagem ilustrativa';}},{once:true});}
 function images(parent=document){parent.querySelectorAll('img').forEach(imageFallback);}
 async function loadCatalog(){catalog=await api('/api/catalog');renderCategories();renderProducts();renderSettings();updateCount();}
 function renderCategories(){const list=['Todos',...catalog.categories.filter(c=>catalog.products.some(p=>p.category===c))];if(!list.includes(category))category='Todos';$('#categories').innerHTML=list.map(c=>`<button class="category-pill" data-category="${esc(c)}" aria-pressed="${c===category}">${esc(c)}</button>`).join('');}

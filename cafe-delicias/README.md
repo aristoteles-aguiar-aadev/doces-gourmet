@@ -1,4 +1,4 @@
-# Café & Delícias — Mãe e Filha
+# Dois Amores Doceria
 
 Loja responsiva com catálogo, pesquisa, categorias, ordenação, detalhes dos produtos, alergênicos, sacola persistente, checkout e painel administrativo. Feita com HTML, CSS, JavaScript e Node.js. A execução local usa o Node nativo; a Vercel usa `@vercel/blob` para persistência privada.
 
