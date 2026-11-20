@@ -16,6 +16,8 @@ export async function createApp(options={}) {
   const serverless=options.serverless??Boolean(process.env.VERCEL);
   const origin=process.env.PUBLIC_BASE_URL||(process.env.VERCEL_PROJECT_PRODUCTION_URL?`https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`:undefined);
   const config={dataDir:process.env.DATA_DIR||join(root,'data'),adminPassword:process.env.ADMIN_PASSWORD,accessToken:process.env.MP_ACCESS_TOKEN,webhookSecret:process.env.MP_WEBHOOK_SECRET,baseUrl:origin,...options};
+  const adminUsername=(options.adminUsername??process.env.ADMIN_USERNAME)?.trim()||'admin';
+  if(adminUsername.length>100)throw new Error('ADMIN_USERNAME precisa ter no máximo 100 caracteres.');
   if(config.baseUrl)config.baseUrl=new URL(config.baseUrl).origin;
   const store=options.store||(serverless?new BlobStore():new FileStore(config.dataDir));await store.init();
   // One server process owns this file store. A second process must never write it.
@@ -31,7 +33,7 @@ export async function createApp(options={}) {
       s.admin={salt,hash:hash(password,salt)};s.sessions={};return true;
     });
     if(created&&!config.adminPassword){
-      const content=`Acesso ao painel /admin\nSenha: ${password}\nGuarde este arquivo em local seguro.\n`;
+      const content=`Acesso ao painel /admin\nUsuário inicial: ${adminUsername}\nSenha: ${password}\nGuarde este arquivo em local seguro.\n`;
       if(serverless)await store.saveAsset('system/acesso-admin.txt',content,'text/plain');
       else await writeFile(join(config.dataDir,'acesso-admin.txt'),content,{mode:0o600});
     }
@@ -94,7 +96,9 @@ export async function createApp(options={}) {
         const allowed=await store.update(s=>{s.loginAttempts??={};for(const [key,a] of Object.entries(s.loginAttempts))if(now-a.time>900000)delete s.loginAttempts[key];const a=s.loginAttempts[addressHash]??={time:now,count:0};return ++a.count<=8;});
         if(!allowed)throw new ShopError('Muitas tentativas. Aguarde 15 minutos.',429);
         const b=await body(req,2000);const s=await store.read();
-        if(typeof b.password!=='string'||b.password.length>200||!secureEqual(hash(b.password,s.admin.salt),s.admin.hash))throw new ShopError('Senha incorreta.',401);
+        const validPassword=typeof b.password==='string'&&b.password.length<=200&&secureEqual(hash(b.password,s.admin.salt),s.admin.hash);
+        const validUsername=typeof b.username==='string'&&secureEqual(b.username.trim(),adminUsername);
+        if(!validUsername||!validPassword)throw new ShopError('Usuário ou senha incorretos.',401);
         const value=randomBytes(32).toString('hex'),sessionKey=createHash('sha256').update(value).digest('hex');
         await store.update(s=>{delete s.loginAttempts?.[addressHash];s.sessions??={};for(const [key,v] of Object.entries(s.sessions))if(v.expires<now)delete s.sessions[key];s.sessions[sessionKey]={expires:now+12*3600000};});
         res.setHeader('Set-Cookie',`delicias_session=${value}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200${serverless||config.baseUrl?.startsWith('https:')?'; Secure':''}`);
@@ -210,7 +214,7 @@ export async function createApp(options={}) {
       }
       if(path.startsWith('/api/'))throw new ShopError('Rota não encontrada.',404);
       if(req.method!=='GET'&&req.method!=='HEAD')throw new ShopError('Método não permitido.',405);
-      const allowed=new Map([['/','index.html'],['/admin','admin.html'],['/admin/','admin.html'],['/style.css','style.css'],['/app.js','app.js'],['/admin.js','admin.js'],['/marca.jpeg','marca.jpeg'],['/favicon.svg','favicon.svg']]);
+      const allowed=new Map([['/','index.html'],['/admin','admin.html'],['/admin/','admin.html'],['/style.css','style.css'],['/app.js','app.js'],['/admin.js','admin.js'],['/marca.jpeg','marca.jpeg'],['/favicon.svg','favicon.svg'],['/dois-amores-doceria-cabecalho.png','dois-amores-doceria-cabecalho.png']]);
       let filename=allowed.has(path)?join(root,'public',allowed.get(path)):null;
       if(/^\/uploads\/[a-f0-9-]+\.(jpg|png|webp)$/.test(path))filename=join(config.dataDir,path.slice(1));
       if(!filename)throw new ShopError('Página não encontrada.',404);

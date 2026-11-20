@@ -14,6 +14,8 @@ Leituras usam `useCache: false` e alterações usam o ETag com `ifMatch`, repeti
 
 Se `ADMIN_PASSWORD` não estiver configurada, a primeira execução gera uma senha aleatória e a salva **somente no armazenamento privado**, em `system/acesso-admin.txt`. No painel Vercel, abra Storage → doces-gourmet-blob → Manage Blobs → system → acesso-admin.txt. Esse arquivo não tem rota pública no site.
 
+O usuário padrão é `admin`. Para personalizá-lo, defina `ADMIN_USERNAME` em Production e faça um novo deploy.
+
 Outra opção é definir `ADMIN_PASSWORD` nas variáveis privadas da Vercel e fazer um novo deploy. A senha precisa ter pelo menos 12 caracteres. A troca invalida as sessões anteriores. Nunca coloque a senha em `.env.example`, no código ou no repositório.
 
 As sessões administrativas e a contagem de tentativas de login são persistidas no armazenamento compartilhado. Os tokens de sessão são salvos apenas em forma de hash e excluídos dos backups exportados.

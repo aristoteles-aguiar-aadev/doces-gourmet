@@ -16,7 +16,9 @@ test('API protege painel, persiste produto e não inventa pagamento sem credenci
   try{
     assert.equal((await call('/api/admin/products')).status,401);
     assert.equal((await call('/api/login',{password:'errada'})).status,401);
-    const login=await call('/api/login',{password:'senha-forte-de-teste'});
+    assert.equal((await call('/api/login',{password:'senha-forte-de-teste'})).status,401);
+    assert.equal((await call('/api/login',{username:'outro',password:'senha-forte-de-teste'})).status,401);
+    const login=await call('/api/login',{username:'admin',password:'senha-forte-de-teste'});
     assert.equal(login.status,200);const cookie=login.headers.get('set-cookie').split(';')[0];
     const product={name:'Teste de doce',category:'Brigadeiros',description:'',price:550,stock:3,active:true,image:'/marca.jpeg'};
     const saved=await call('/api/admin/products',product,cookie);assert.equal(saved.status,201);
@@ -68,7 +70,7 @@ test('sessão administrativa sobrevive a outra instância e logout revoga em amb
   let b;
   try{
     const baseA=`http://127.0.0.1:${a.address().port}`;
-    const login=await fetch(baseA+'/api/login',{method:'POST',headers:{'Content-Type':'application/json','X-Shop-Request':'1',Origin:baseA},body:JSON.stringify({password:'senha-forte-de-teste'})});
+    const login=await fetch(baseA+'/api/login',{method:'POST',headers:{'Content-Type':'application/json','X-Shop-Request':'1',Origin:baseA},body:JSON.stringify({username:'admin',password:'senha-forte-de-teste'})});
     const cookie=login.headers.get('set-cookie').split(';')[0];
     b=await createApp({dataDir:directory,quiet:true});await new Promise(resolve=>b.listen(0,'127.0.0.1',resolve));const baseB=`http://127.0.0.1:${b.address().port}`;
     assert.equal((await fetch(baseB+'/api/admin/products',{headers:{Cookie:cookie}})).status,200);
@@ -86,7 +88,7 @@ test('login Vercel aceita aliases do próprio site e continua bloqueando outras 
   const login=(host,origin,extra={})=>new Promise((resolve,reject)=>{
     const req=httpRequest(base+'/api/login',{method:'POST',headers:{Host:host,Origin:origin,'Content-Type':'application/json','X-Shop-Request':'1',...extra}},res=>{
       res.resume();res.on('end',()=>resolve({status:res.statusCode,cookie:res.headers['set-cookie']?.[0]}));
-    });req.on('error',reject);req.end(JSON.stringify({password:'senha-forte-de-teste'}));
+    });req.on('error',reject);req.end(JSON.stringify({username:'admin',password:'senha-forte-de-teste'}));
   });
   try{
     for(const host of ['cafesdelicias.vercel.app','doces-gourmet-aristoteles-aguiars-projects.vercel.app']){

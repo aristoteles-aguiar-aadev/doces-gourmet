@@ -10,7 +10,7 @@ Loja responsiva com catálogo, pesquisa, categorias, ordenação, detalhes dos p
 node server.mjs
 ```
 
-Abra http://127.0.0.1:3180 e http://127.0.0.1:3180/admin. A senha inicial é gerada em `data/acesso-admin.txt`. Para escolher outra senha, configure `ADMIN_PASSWORD` no `.env` e reinicie. Não versionar o `.env` nem a pasta `data`.
+Abra http://127.0.0.1:3180 e http://127.0.0.1:3180/admin. A senha inicial é gerada em `data/acesso-admin.txt`. O usuário padrão é `admin`. Para personalizá-lo, configure `ADMIN_USERNAME`. Para escolher outra senha, configure `ADMIN_PASSWORD` no `.env` e reinicie. Não versionar o `.env` nem a pasta `data`.
 
 O servidor abre apenas no próprio computador por padrão. O arquivo `.env.example` documenta as configurações; copie-o para `.env` antes de editar. Reinicie após alterações de ambiente. Se a porta estiver ocupada, altere `PORT`.
 

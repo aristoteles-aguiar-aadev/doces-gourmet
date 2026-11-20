@@ -1,6 +1,6 @@
-# Café & Delícias — Mãe e Filha
+# Dois Amores Doceria
 
-A loja está em [cafe-delicias](./cafe-delicias). Identidade visual inspirada na imagem fornecida: creme, rosa, chocolate, tipografia delicada e a marca original na seção de história.
+A loja está em [cafe-delicias](./cafe-delicias). Identidade visual inspirada na imagem fornecida: creme, rosa, chocolate, tipografia delicada e a marca na seção de história.
 
 Para iniciar no Windows, abra **iniciar-loja.cmd** ou execute:
 
