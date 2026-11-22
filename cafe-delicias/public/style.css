@@ -11,3 +11,39 @@
 .hero-spark,.hero-flower,.banner-flower{display:block;width:1em;height:1em;fill:none;stroke:currentColor;stroke-linecap:round;stroke-linejoin:round;pointer-events:none;}
 
 .header-wordmark img{width:7.9em;height:auto;margin:-.15em}
+
+.orders-report-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 12px;
+  padding: 16px;
+  margin-bottom: 18px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--paper);
+}
+.orders-report-form > div { flex: 1 1 220px; }
+.orders-report-form h2 { font: 700 15px var(--sans); letter-spacing: 0; }
+.orders-report-form p { color: var(--muted); font-size: 12px; }
+.orders-report-form label { display: grid; gap: 5px; font-size: 12px; }
+.orders-report-form input {
+  min-height: 40px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: inherit;
+  background: #fff;
+}
+.order-items { overflow-x: auto; margin: 12px 0; }
+.order-items table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.order-items th, .order-items td {
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--line);
+  text-align: right;
+  vertical-align: top;
+}
+.order-items :is(th, td):first-child { text-align: left; overflow-wrap: anywhere; }
+.order-items td:not(:first-child) { white-space: nowrap; }
+.order-items small { display: block; margin-top: 3px; white-space: pre-line; }
+.order-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }

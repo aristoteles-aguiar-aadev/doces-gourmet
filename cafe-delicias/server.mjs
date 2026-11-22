@@ -6,6 +6,7 @@ import {randomBytes,randomUUID,scryptSync,timingSafeEqual,createHmac,createHash}
 import {FileStore} from './lib/store.mjs';
 import {BlobStore} from './lib/blob-store.mjs';
 import {ShopError,text,validateProduct,quote,customerInput,categories} from './lib/shop.mjs';
+import {orderReport,orderReceipt} from './lib/order-reports.mjs';
 
 const root=dirname(fileURLToPath(import.meta.url));
 const secureEqual=(a,b)=>typeof a==='string'&&typeof b==='string'&&Buffer.byteLength(a)===Buffer.byteLength(b)&&timingSafeEqual(Buffer.from(a),Buffer.from(b));
@@ -68,6 +69,7 @@ export async function createApp(options={}) {
   }
   const app=http.createServer(async(req,res)=>{
     const json=(data,status=200)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(data));};
+    const printable=html=>{res.writeHead(200,{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store'});res.end(html);};
     res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','same-origin');res.setHeader('X-Frame-Options','DENY');
     res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'");
     try {
@@ -144,6 +146,15 @@ export async function createApp(options={}) {
         }
       }
       if(path==='/api/admin/orders'&&req.method==='GET')return json({orders:(await store.read()).orders.map(({key,fingerprint,receiptToken,...o})=>o)});
+      if(path==='/api/admin/orders/report'&&req.method==='GET'){
+        return printable(orderReport((await store.read()).orders,url.searchParams));
+      }
+      const receiptMatch=path.match(/^\/api\/admin\/orders\/([a-f0-9-]+)\/receipt$/);
+      if(receiptMatch&&req.method==='GET'){
+        const order=(await store.read()).orders.find(order=>order.id===receiptMatch[1]);
+        if(!order)throw new ShopError('Pedido não encontrado.',404);
+        return printable(orderReceipt(order,url.searchParams.get('paper')));
+      }
       const syncMatch=path.match(/^\/api\/admin\/orders\/([a-f0-9-]+)\/sync$/);
       if(syncMatch&&req.method==='POST'){
         const o=(await store.read()).orders.find(o=>o.id===syncMatch[1]);if(!o)throw new ShopError('Pedido não encontrado.',404);
@@ -215,6 +226,8 @@ export async function createApp(options={}) {
       if(path.startsWith('/api/'))throw new ShopError('Rota não encontrada.',404);
       if(req.method!=='GET'&&req.method!=='HEAD')throw new ShopError('Método não permitido.',405);
       const allowed=new Map([['/','index.html'],['/admin','admin.html'],['/admin/','admin.html'],['/style.css','style.css'],['/app.js','app.js'],['/admin.js','admin.js'],['/marca.jpeg','marca.jpeg'],['/favicon.svg','favicon.svg'],['/dois-amores-doceria-cabecalho.png','dois-amores-doceria-cabecalho.png']]);
+      allowed.set('/order-print.css','order-print.css');
+      allowed.set('/order-print.js','order-print.js');
       let filename=allowed.has(path)?join(root,'public',allowed.get(path)):null;
       if(/^\/uploads\/[a-f0-9-]+\.(jpg|png|webp)$/.test(path))filename=join(config.dataDir,path.slice(1));
       if(!filename)throw new ShopError('Página não encontrada.',404);

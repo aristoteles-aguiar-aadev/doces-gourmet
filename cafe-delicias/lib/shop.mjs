@@ -26,7 +26,7 @@ export function quote(state,input) {
     const p=state.products.find(p=>p.id===id&&p.active);
     if(!p) throw new ShopError('Um produto não está mais disponível.',409);
     if(quantity>p.stock||quantity>99) throw new ShopError(`Estoque insuficiente para ${p.name}.`,409);
-    return {id,name:p.name,price:p.price,quantity};
+    return {id,name:p.name,description:p.description??'',price:p.price,quantity};
   });
   const subtotal=items.reduce((sum,i)=>sum+i.price*i.quantity,0);
   const deliveryFee=input.fulfillment==='delivery'?state.settings.deliveryFee:0;

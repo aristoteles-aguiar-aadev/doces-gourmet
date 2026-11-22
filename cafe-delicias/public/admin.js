@@ -29,7 +29,43 @@ $('#product-form').addEventListener('submit',async e=>{e.preventDefault();const 
 $('#delete-product').onclick=()=>$('#confirm-delete').showModal();
 $('#confirm-delete-button').onclick=async()=>{const button=$('#confirm-delete-button');button.disabled=true;try{await api(`/api/admin/products/${$('#product-form').elements.id.value}`,{method:'DELETE'});$('#confirm-delete').close();$('#editor').close();await dashboard();toast('Produto excluído.');}catch(e){toast(e.message);}finally{button.disabled=false;}};
 $('#settings-form').addEventListener('submit',async e=>{e.preventDefault();const f=e.target,button=f.querySelector('button[type=submit]');button.disabled=true;$('#settings-error').hidden=true;try{const b=Object.fromEntries(new FormData(f));b.deliveryFee=Math.round(Number(b.deliveryFee)*100);b.deliveryEnabled=f.elements.deliveryEnabled.checked;b.catalogExample=f.elements.catalogExample.checked;await api('/api/admin/settings',{method:'PUT',body:JSON.stringify(b)});await dashboard();toast('Informações da loja salvas.');}catch(e){error('#settings-error',e);}finally{button.disabled=false;}});
-async function orders(){const {orders}=await api('/api/admin/orders');$('#order-stats').innerHTML=`<div class="stat"><span>Pedidos recebidos</span><strong>${orders.length}</strong></div><div class="stat"><span>Pagamentos confirmados</span><strong>${orders.filter(o=>o.status==='paid').length}</strong></div><div class="stat"><span>Total confirmado</span><strong>${money(orders.filter(o=>o.status==='paid').reduce((n,o)=>n+o.total,0))}</strong></div>`;$('#admin-orders').innerHTML=orders.length?orders.map(o=>`<article class="order-card"><div class="order-card-header"><h3>Pedido ${esc(o.id.slice(0,8).toUpperCase())}</h3><span class="status-label ${o.status==='paid'?'':'paused'}">${esc(statuses[o.status]||o.status)}</span></div><p>${esc(new Date(o.createdAt).toLocaleString('pt-BR'))} · ${esc(o.customer.name)} · ${esc(o.customer.phone)}<br>${esc(o.customer.email)}</p><p>${o.items.map(i=>`${i.quantity} × ${esc(i.name)}`).join('<br>')}</p><p><strong>${money(o.total)}</strong> · ${esc(({pix:'PIX',boleto:'Boleto',credit:'Crédito',debit:'Débito'})[o.method])} · ${o.fulfillment==='delivery'?'Entrega':'Retirada'}${o.customer.address?'<br>'+esc(o.customer.address):''}${o.customer.notes?'<br>Observações: '+esc(o.customer.notes):''}</p><button class="button secondary" data-sync="${esc(o.id)}">Consultar pagamento</button></article>`).join(''):'<div class="empty-state"><h3>Os próximos momentos doces chegam aqui</h3><p>Quando seus clientes fizerem pedidos, eles aparecerão nesta tela.</p></div>';}
+function orderCard(order){
+  const code=esc(order.id.slice(0,8).toUpperCase());
+  const method=({pix:'PIX',boleto:'Boleto',credit:'Crédito',debit:'Débito'})[order.method];
+  const rows=order.items.map(item=>`<tr>
+    <td><strong>${esc(item.name)}</strong>${item.description?`<small>${esc(item.description)}</small>`:''}</td>
+    <td>${esc(item.quantity)}</td><td>${money(item.price)}</td><td>${money(item.price*item.quantity)}</td>
+  </tr>`).join('');
+  return `<article class="order-card">
+    <div class="order-card-header">
+      <h3>Pedido ${code}</h3>
+      <span class="status-label ${order.status==='paid'?'':'paused'}">${esc(statuses[order.status]||order.status)}</span>
+    </div>
+    <p>${esc(new Date(order.createdAt).toLocaleString('pt-BR'))} · ${esc(order.customer.name)} · ${esc(order.customer.phone)}<br>${esc(order.customer.email)}</p>
+    <div class="order-items">
+      <table aria-label="Itens do pedido ${code}">
+        <thead><tr><th scope="col">Descrição</th><th scope="col">Qtd.</th><th scope="col">Valor unit.</th><th scope="col">Total do item</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+    <p>Subtotal ${money(order.subtotal)} · Frete ${money(order.deliveryFee)} · <strong>Total ${money(order.total)}</strong></p>
+    <p>${esc(method)} · ${order.fulfillment==='delivery'?'Entrega':'Retirada'}
+      ${order.customer.address?`<br>${esc(order.customer.address)}`:''}
+      ${order.customer.notes?`<br>Observações: ${esc(order.customer.notes)}`:''}</p>
+    <div class="order-actions">
+      <a class="button secondary" href="/api/admin/orders/${encodeURIComponent(order.id)}/receipt" target="_blank" rel="noopener" aria-label="Abrir via térmica do pedido ${code}">Via térmica ↗</a>
+      <button class="button secondary" data-sync="${esc(order.id)}">Consultar pagamento</button>
+    </div>
+  </article>`;
+}
+async function orders(){
+  const {orders}=await api('/api/admin/orders');
+  const paid=orders.filter(order=>order.status==='paid');
+  $('#order-stats').innerHTML=`<div class="stat"><span>Pedidos recebidos</span><strong>${orders.length}</strong></div>
+    <div class="stat"><span>Pagamentos confirmados</span><strong>${paid.length}</strong></div>
+    <div class="stat"><span>Total confirmado</span><strong>${money(paid.reduce((sum,order)=>sum+order.total,0))}</strong></div>`;
+  $('#admin-orders').innerHTML=orders.length?orders.map(orderCard).join(''):'<div class="empty-state"><h3>Nenhum pedido recebido</h3><p>Os pedidos aparecerão aqui.</p></div>';
+}
 $('#refresh-orders').onclick=()=>orders().catch(e=>toast(e.message));
 document.addEventListener('click',async e=>{
   const close=e.target.closest('[data-close]');if(close){$('#'+close.dataset.close).close();return;}
@@ -38,4 +74,8 @@ document.addEventListener('click',async e=>{
   const sync=e.target.closest('[data-sync]');if(sync){sync.disabled=true;try{await api(`/api/admin/orders/${sync.dataset.sync}/sync`,{method:'POST',body:'{}'});await orders();toast('Status consultado no Mercado Pago.');}catch(e){toast(e.message);sync.disabled=false;}}
 });
 $('#photo-preview').onerror=()=>{$('#photo-preview').src='/marca.jpeg';};
-api('/api/session').then(s=>{if(s.hosted)$('#first-access-note').textContent='Primeiro acesso? Consulte o arquivo system/acesso-admin.txt no armazenamento privado da sua conta Vercel, ou use a senha definida nas configurações da hospedagem.';if(s.authenticated)return dashboard();}).catch(e=>error('#login-error',e));
+api('/api/session').then(s=>{
+  const firstAccessNote=$('#first-access-note');
+  if(s.hosted&&firstAccessNote)firstAccessNote.textContent='Primeiro acesso? Consulte o arquivo system/acesso-admin.txt no armazenamento privado da sua conta Vercel, ou use a senha definida nas configurações da hospedagem.';
+  if(s.authenticated)return dashboard();
+}).catch(e=>error('#login-error',e));

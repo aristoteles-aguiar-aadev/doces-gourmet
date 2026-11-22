@@ -62,6 +62,15 @@
                     <p>O status financeiro é confirmado pelo Mercado Pago.</p><button class="button secondary"
                         id="refresh-orders">Atualizar pedidos</button>
                 </div>
+                <form class="orders-report-form" action="/api/admin/orders/report" method="get" target="_blank" rel="noopener">
+                    <div>
+                        <h2>Relatório de pedidos</h2>
+                        <p>Deixe as datas vazias para incluir todos os pedidos.</p>
+                    </div>
+                    <label>Data inicial<input type="date" name="from"></label>
+                    <label>Data final<input type="date" name="to"></label>
+                    <button class="button secondary" type="submit">Exportar relatório A4 / PDF ↗</button>
+                </form>
                 <div id="admin-orders" class="orders-list"></div>
                 <p class="admin-footer-note">Pedidos com pagamento pendente mantêm o estoque reservado. Não produza nem
                     entregue antes da confirmação. Use “Consultar pagamento” para conferir diretamente no provedor. Para

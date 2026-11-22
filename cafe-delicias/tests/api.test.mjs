@@ -33,10 +33,70 @@ test('API protege painel, persiste produto e não inventa pagamento sem credenci
   }finally{await new Promise(resolve=>app.close(resolve));await rm(directory,{recursive:true,force:true});}
 });
 
+test('relatório A4 por período e via térmica usam os itens registrados e exigem login',async(t)=>{
+  const {createApp}=await import('../server.mjs');
+  const {FileStore}=await import('../lib/store.mjs');
+  const directory=await mkdtemp(join(tmpdir(),'delicias-relatorios-'));
+  const store=new FileStore(directory);
+  const app=await createApp({store,dataDir:directory,adminPassword:'senha-forte-de-teste',quiet:true});
+  await new Promise(resolve=>app.listen(0,'127.0.0.1',resolve));
+  t.after(async()=>{
+    await new Promise(resolve=>app.close(resolve));
+    await rm(directory,{recursive:true,force:true});
+  });
+  const customer={name:'Cliente de teste',email:'cliente@example.com',phone:'85999999999',notes:'Observação interna'};
+  const order={id:'aaaaaaaa-0000-0000-0000-000000000000',createdAt:'2026-11-23T02:30:00.000Z',customer,
+    items:[{name:'Brigadeiro',description:'Chocolate <70%>',price:450,quantity:3}],status:'paid',method:'credit',
+    fulfillment:'delivery',subtotal:1350,deliveryFee:500,total:1850,receiptToken:'privado'};
+  const older={...order,id:'bbbbbbbb-0000-0000-0000-000000000000',createdAt:'2026-11-21T12:00:00Z',
+    items:[{name:'Bolo antigo',price:1000,quantity:1}],subtotal:1000,deliveryFee:0,total:1000,status:'pending'};
+  await store.update(s=>{s.orders=[order,older];});
+  const base=`http://127.0.0.1:${app.address().port}`;
+  const report='/api/admin/orders/report?from=2026-11-22&to=2026-11-22';
+  const receipt=`/api/admin/orders/${order.id}/receipt?paper=58`;
+  const unauthorized=await fetch(base+report);
+  assert.equal(unauthorized.status,401);
+  assert.equal((await fetch(base+receipt)).status,401);
+  const login=await fetch(base+'/api/login',{
+    method:'POST',headers:{'Content-Type':'application/json','X-Shop-Request':'1'},
+    body:JSON.stringify({username:'admin',password:'senha-forte-de-teste'}),
+  });
+  assert.equal(login.status,200);
+  const headers={Cookie:login.headers.get('set-cookie').split(';')[0]};
+  const response=await fetch(base+report,{headers});
+  assert.equal(response.status,200);
+  assert.match(response.headers.get('content-type'),/^text\/html/);
+  assert.equal(response.headers.get('cache-control'),'no-store');
+  const a4=await response.text();
+  assert.match(a4,/Relatório de pedidos/);
+  assert.match(a4,/Chocolate &lt;70%&gt;/);
+  assert.match(a4,/<td[^>]*>3<\/td>/);
+  for(const amount of ['4,50','13,50','5,00','18,50'])assert.ok(a4.includes(amount),amount);
+  assert.doesNotMatch(a4,/Bolo antigo|privado/);
+  assert.match(a4,/href="\/order-print.css"/);
+  assert.match(a4,/src="\/order-print.js"/);
+  assert.match((await fetch(base+'/order-print.css')).headers.get('content-type'),/^text\/css/);
+  assert.match((await fetch(base+'/order-print.js')).headers.get('content-type'),/^text\/javascript/);
+  assert.equal((await fetch(base+'/api/admin/orders/report?from=2026-02-31',{headers})).status,400);
+
+  const thermal=await fetch(base+receipt,{headers});
+  assert.equal(thermal.status,200);
+  const receiptHtml=await thermal.text();
+  assert.match(receiptHtml,/Via do cliente/);
+  assert.match(receiptHtml,/thermal-58/);
+  assert.match(receiptHtml,/Chocolate &lt;70%&gt;/);
+  assert.match(receiptHtml,/18,50/);
+  assert.doesNotMatch(receiptHtml,/Bolo antigo|cliente@example\.com|85999999999|Observação interna|privado/);
+  const legacy=await(await fetch(base+`/api/admin/orders/${older.id}/receipt`,{headers})).text();
+  assert.match(legacy,/Bolo antigo/);
+  assert.match(legacy,/thermal-80/);
+  assert.match(legacy,/Aguardando pagamento/);
+});
+
 test('checkout reserva estoque uma vez, filtra pagamento e exige confirmação assinada',async()=>{
   const {createApp}=await import('../server.mjs');const {FileStore}=await import('../lib/store.mjs');
   const directory=await mkdtemp(join(tmpdir(),'delicias-pay-'));const store=new FileStore(directory);await store.init();
-  await store.update(s=>{s.settings.catalogExample=false;s.settings.pickupAddress='Rua Exemplo, 123';s.products=[{id:'doce',name:'Doce de teste',price:450,stock:2,active:true}];});
+  await store.update(s=>{s.settings.catalogExample=false;s.settings.pickupAddress='Rua Exemplo, 123';s.products=[{id:'doce',name:'Doce de teste',description:'Receita original',price:450,stock:2,active:true}];});
   let preferenceBody,orderId,providerCalls=0,providerStatus='rejected';
   const app=await createApp({dataDir:directory,adminPassword:'senha-forte-de-teste',quiet:true,accessToken:'token-test',webhookSecret:'secret-test',baseUrl:'https://loja.example',paymentFetch:async(url,init)=>{
     if(url.endsWith('/checkout/preferences')){providerCalls++;preferenceBody=JSON.parse(init.body);orderId=preferenceBody.external_reference;return Response.json({id:'pref-test',init_point:'https://www.mercadopago.com.br/checkout/v1/redirect?pref_id=pref-test'});}
@@ -51,6 +111,8 @@ test('checkout reserva estoque uma vez, filtra pagamento e exige confirmação a
     assert.equal(second.status,200);assert.equal((await second.json()).id,a.id);
     assert.equal(providerCalls,1);assert.equal(preferenceBody.items[0].unit_price,4.5);assert.equal(preferenceBody.payment_methods.excluded_payment_types.some(x=>x.id==='bank_transfer'),false);
     assert.equal((await store.read()).products[0].stock,1);assert.equal((await store.read()).orders[0].status,'pending');
+    await store.update(s=>{s.products[0].description='Receita nova';});
+    assert.equal((await store.read()).orders[0].items[0].description,'Receita original');
     assert.equal((await fetch(base+`/api/orders/${a.id}?key=wrong`)).status,404);
     const forged=await fetch(base+'/api/payments/webhook?data.id=123',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type:'payment',data:{id:'123'}})});assert.equal(forged.status,401);assert.equal((await store.read()).orders[0].status,'pending');
     const ts=String(Date.now());
