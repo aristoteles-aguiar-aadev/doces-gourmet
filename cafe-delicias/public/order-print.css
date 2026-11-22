@@ -59,6 +59,10 @@ small {
 .report-summary dd { margin: 0.3em 0 0; font-weight: bold; }
 .report-order { margin: 1.25rem 0 1.75rem; }
 .report-order header { margin-bottom: 0.6rem; break-after: avoid; }
+.payment-details { margin: 0.5em 0; break-inside: avoid; }
+.payment-details div { display: flex; flex-wrap: wrap; gap: 0.25em 0.75em; }
+.payment-details dt { font-weight: bold; }
+.payment-details dd { margin: 0; }
 table { border-collapse: collapse; width: 100%; }
 thead { display: table-header-group; }
 tr { break-inside: avoid; }
@@ -90,6 +94,9 @@ td.number { white-space: nowrap; }
 }
 .thermal .document-heading, .receipt-footer { text-align: center; }
 .thermal h1 { font-size: 12pt; }
+.receipt-logo { display: block; width: min(100%, 62mm); height: auto; margin: 0 auto 0.6em; }
+.thermal .payment-details { padding: 0.5em 0; border-bottom: 1px dashed #000; }
+.thermal .payment-details div { justify-content: space-between; }
 .receipt-items { list-style: none; margin: 0; padding: 0; }
 .receipt-items li { padding: 0.55em 0; border-bottom: 1px dashed #000; break-inside: avoid; }
 .receipt-items p { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0.2em 0.5em; margin: 0.3em 0 0; }
@@ -105,4 +112,5 @@ td.number { white-space: nowrap; }
   .print-document { margin: 0; }
   .a4 .print-document { page: orders-a4; width: auto; padding: 0; }
   .thermal .print-document { page: orders-thermal; }
+  .receipt-logo { filter: grayscale(1); }
 }

@@ -46,10 +46,12 @@ test('relatório A4 por período e via térmica usam os itens registrados e exig
   });
   const customer={name:'Cliente de teste',email:'cliente@example.com',phone:'85999999999',notes:'Observação interna'};
   const order={id:'aaaaaaaa-0000-0000-0000-000000000000',createdAt:'2026-11-23T02:30:00.000Z',customer,
-    items:[{name:'Brigadeiro',description:'Chocolate <70%>',price:450,quantity:3}],status:'paid',method:'credit',
+    items:[{name:'Brigadeiro',description:'Chocolate <70%>',price:450,quantity:3}],status:'paid',method:'pix',
+    paymentType:'credit_card',installments:3,
     fulfillment:'delivery',subtotal:1350,deliveryFee:500,total:1850,receiptToken:'privado'};
   const older={...order,id:'bbbbbbbb-0000-0000-0000-000000000000',createdAt:'2026-11-21T12:00:00Z',
-    items:[{name:'Bolo antigo',price:1000,quantity:1}],subtotal:1000,deliveryFee:0,total:1000,status:'pending'};
+    items:[{name:'Bolo antigo',price:1000,quantity:1}],subtotal:1000,deliveryFee:0,total:1000,status:'pending',
+    method:'credit',paymentType:undefined,installments:undefined};
   await store.update(s=>{s.orders=[order,older];});
   const base=`http://127.0.0.1:${app.address().port}`;
   const report='/api/admin/orders/report?from=2026-11-22&to=2026-11-22';
@@ -69,6 +71,7 @@ test('relatório A4 por período e via térmica usam os itens registrados e exig
   assert.equal(response.headers.get('cache-control'),'no-store');
   const a4=await response.text();
   assert.match(a4,/Relatório de pedidos/);
+  assert.match(a4,/Forma de pagamento<\/dt><dd>Cartão de crédito<\/dd>/);
   assert.match(a4,/Chocolate &lt;70%&gt;/);
   assert.match(a4,/<td[^>]*>3<\/td>/);
   for(const amount of ['4,50','13,50','5,00','18,50'])assert.ok(a4.includes(amount),amount);
@@ -83,6 +86,10 @@ test('relatório A4 por período e via térmica usam os itens registrados e exig
   assert.equal(thermal.status,200);
   const receiptHtml=await thermal.text();
   assert.match(receiptHtml,/Via do cliente/);
+  assert.match(receiptHtml,/src="\/dois-amores-doceria-cabecalho\.png"/);
+  assert.match((await fetch(base+'/dois-amores-doceria-cabecalho.png')).headers.get('content-type'),/^image\/png/);
+  assert.match(receiptHtml,/Forma de pagamento<\/dt><dd>Cartão de crédito<\/dd>/);
+  assert.match(receiptHtml,/Parcelas<\/dt><dd>3×<\/dd>/);
   assert.match(receiptHtml,/thermal-58/);
   assert.match(receiptHtml,/Chocolate &lt;70%&gt;/);
   assert.match(receiptHtml,/18,50/);
@@ -91,6 +98,8 @@ test('relatório A4 por período e via térmica usam os itens registrados e exig
   assert.match(legacy,/Bolo antigo/);
   assert.match(legacy,/thermal-80/);
   assert.match(legacy,/Aguardando pagamento/);
+  assert.match(legacy,/Forma de pagamento<\/dt><dd>Cartão de crédito<\/dd>/);
+  assert.match(legacy,/Parcelas<\/dt><dd>Não informadas<\/dd>/);
 });
 
 test('checkout reserva estoque uma vez, filtra pagamento e exige confirmação assinada',async()=>{
@@ -100,7 +109,10 @@ test('checkout reserva estoque uma vez, filtra pagamento e exige confirmação a
   let preferenceBody,orderId,providerCalls=0,providerStatus='rejected';
   const app=await createApp({dataDir:directory,adminPassword:'senha-forte-de-teste',quiet:true,accessToken:'token-test',webhookSecret:'secret-test',baseUrl:'https://loja.example',paymentFetch:async(url,init)=>{
     if(url.endsWith('/checkout/preferences')){providerCalls++;preferenceBody=JSON.parse(init.body);orderId=preferenceBody.external_reference;return Response.json({id:'pref-test',init_point:'https://www.mercadopago.com.br/checkout/v1/redirect?pref_id=pref-test'});}
-    if(/\/v1\/payments\/\d+$/.test(url))return Response.json({id:Number(url.split('/').pop()),external_reference:orderId,currency_id:'BRL',transaction_amount:4.5,status:providerStatus});
+    if(/\/v1\/payments\/\d+$/.test(url))return Response.json({
+      id:Number(url.split('/').pop()),external_reference:orderId,currency_id:'BRL',transaction_amount:4.5,status:providerStatus,
+      ...(providerStatus==='approved'?{payment_type_id:'credit_card',installments:3}:{payment_type_id:'debit_card',installments:1}),
+    });
     throw new Error('Unexpected provider request');
   }});
   await new Promise(resolve=>app.listen(0,'127.0.0.1',resolve));const base=`http://127.0.0.1:${app.address().port}`;
@@ -121,6 +133,9 @@ test('checkout reserva estoque uma vez, filtra pagamento e exige confirmação a
     providerStatus='approved';assert.equal((await notify('124')).status,200);assert.equal((await notify('124')).status,200);
     const receipt=await(await fetch(base+`/api/orders/${a.id}?key=${a.receiptToken}`)).json();assert.equal(receipt.order.status,'paid');assert.equal((await store.read()).products[0].stock,1);
     providerStatus='pending';await notify('123');assert.equal((await store.read()).orders[0].status,'paid');
+    const paidOrder=(await store.read()).orders[0];
+    assert.equal(paidOrder.paymentType,'credit_card');
+    assert.equal(paidOrder.installments,3);
     payload.key='c'.repeat(32);payload.items[0].quantity=2;assert.equal((await checkout()).status,409);
   }finally{await new Promise(resolve=>app.close(resolve));await rm(directory,{recursive:true,force:true});}
 });

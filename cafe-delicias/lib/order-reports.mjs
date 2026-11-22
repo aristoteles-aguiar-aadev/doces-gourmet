@@ -12,7 +12,12 @@ const statuses={
   creating:'Preparando checkout',pending:'Aguardando pagamento',paid:'Pago',rejected:'Não aprovado',
   cancelled:'Cancelado',refunded:'Reembolsado',charged_back:'Contestado',in_mediation:'Em análise',
 };
-const methods={pix:'Pix',boleto:'Boleto',credit:'Crédito',debit:'Débito'};
+const requestedTypes={pix:'bank_transfer',boleto:'ticket',credit:'credit_card',debit:'debit_card'};
+const paymentMethods={
+  bank_transfer:'Pix',ticket:'Boleto',credit_card:'Cartão de crédito',debit_card:'Cartão de débito',
+  prepaid_card:'Cartão pré-pago',account_money:'Saldo Mercado Pago',digital_currency:'Linha de crédito',
+};
+const nonInstallmentTypes=new Set(['bank_transfer','ticket','debit_card','prepaid_card','account_money']);
 
 function printablePage(title, layout, content, options='') {
   return `<!doctype html>
@@ -37,9 +42,20 @@ function printablePage(title, layout, content, options='') {
 
 function orderDetails(order) {
   const status=statuses[order.status]||order.status;
-  const method=methods[order.method];
   return `<p>${escapeHtml(dateTime.format(new Date(order.createdAt)))} · ${escapeHtml(order.customer?.name)}</p>
-    <p>${order.fulfillment==='delivery'?'Entrega':'Retirada'}${method?` · ${method}`:''} · <strong>${escapeHtml(status)}</strong></p>`;
+    <p>${order.fulfillment==='delivery'?'Entrega':'Retirada'} · <strong>${escapeHtml(status)}</strong></p>`;
+}
+
+function paymentDetails(order, showInstallments=false) {
+  const type=order.paymentType||requestedTypes[order.method];
+  const method=Object.hasOwn(paymentMethods,type)?paymentMethods[type]:order.paymentType?'Mercado Pago':'Não informada';
+  let installments='';
+  if(showInstallments){
+    const count=Number.isSafeInteger(order.installments)&&order.installments>0;
+    const label=count?`${order.installments}×`:nonInstallmentTypes.has(type)?'Sem parcelamento':'Não informadas';
+    installments=`<div><dt>Parcelas</dt><dd>${label}</dd></div>`;
+  }
+  return `<dl class="payment-details"><div><dt>Forma de pagamento</dt><dd>${method}</dd></div>${installments}</dl>`;
 }
 
 function totals(order) {
@@ -79,6 +95,7 @@ export function orderReport(orders, query) {
       <header>
         <h2>Pedido ${escapeHtml(order.id.slice(0,8).toUpperCase())}</h2>
         ${orderDetails(order)}
+        ${paymentDetails(order)}
       </header>
       <table>
         <thead><tr><th scope="col">Descrição</th><th scope="col" class="number">Qtd.</th>
@@ -112,11 +129,12 @@ export function orderReceipt(order, paper) {
     <span>Selecione a mesma largura na janela da impressora.</span>`;
   return printablePage(`Via do cliente · Pedido ${id}`,`thermal thermal-${width}`,`
     <header class="document-heading">
-      <h1>Dois Amores Doceria</h1>
+      <h1><img class="receipt-logo" src="/dois-amores-doceria-cabecalho.png" width="821" height="221" alt="Dois Amores Doceria"></h1>
       <p>Via do cliente</p>
       <p><strong>Pedido ${id}</strong></p>
       ${orderDetails(order)}
     </header>
+    ${paymentDetails(order,true)}
     <ul class="receipt-items" aria-label="Itens do pedido">${order.items.map(item=>`
       <li>${itemDescription(item)}<p>${escapeHtml(item.quantity)} × ${money(item.price)}
         <strong>${money(item.quantity*item.price)}</strong></p></li>`).join('')}</ul>

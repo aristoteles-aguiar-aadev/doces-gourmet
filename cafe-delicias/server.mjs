@@ -56,7 +56,14 @@ export async function createApp(options={}) {
       const mapping={approved:'paid',refunded:'refunded',charged_back:'charged_back',cancelled:'cancelled',rejected:'rejected',pending:'pending',in_process:'pending',authorized:'pending',in_mediation:'in_mediation'};
       const next=mapping[p.status];if(!next)return;
       if(['paid','refunded','charged_back'].includes(o.status)&&['pending','cancelled','rejected'].includes(next))return;
-      o.paymentId=String(p.id);o.status=next;o.updatedAt=new Date().toISOString();
+      const reconciledId=String(p.id);
+      if(o.paymentId!==reconciledId){
+        delete o.paymentType;
+        delete o.installments;
+      }
+      if(typeof p.payment_type_id==='string'&&/^[a-z_]{1,40}$/.test(p.payment_type_id))o.paymentType=p.payment_type_id;
+      if(Number.isSafeInteger(p.installments)&&p.installments>0)o.installments=p.installments;
+      o.paymentId=reconciledId;o.status=next;o.updatedAt=new Date().toISOString();
       // Pending/rejected attempts may be retried at the provider. Stock is held until
       // the administrator explicitly releases an expired preference after checking it.
     });
