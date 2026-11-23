@@ -24,6 +24,10 @@ As sessões administrativas e a contagem de tentativas de login são persistidas
 
 Configure `MP_ACCESS_TOKEN`, `MP_WEBHOOK_SECRET` e `PUBLIC_BASE_URL` em Production. Sem `PUBLIC_BASE_URL`, a origem principal é obtida de `VERCEL_PROJECT_PRODUCTION_URL`. O webhook é `/api/payments/webhook`.
 
+Para abrir crédito, débito, Pix e boleto dentro da loja, configure `MP_TRANSPARENT_PUBLIC_KEY`, `MP_TRANSPARENT_ACCESS_TOKEN` e `MP_TRANSPARENT_WEBHOOK_SECRET` da aplicação Mercado Pago com Checkout Bricks (Payments API). Use as credenciais de teste e a URL HTTPS do deploy em Preview para homologar. Use as credenciais produtivas da aplicação em Production. Armazene o Access Token e a assinatura como segredos na Vercel.
+
+Cadastre o evento **Pagamentos (legacy)** em `/api/payments/transparent-webhook` na aplicação do Checkout Transparente. Preserve a URL e as credenciais do Checkout Pro para conciliar pedidos já iniciados por ele. Cadastre também uma chave Pix na conta vendedora. Os cartões de débito e os limites de valor dependem dos meios habilitados pelo Mercado Pago para a conta.
+
 O catálogo de exemplo bloqueia cobranças mesmo com credenciais. Substitua produtos, fotos, alergênicos, estoque e dados comerciais antes de desativar a demonstração no painel. Homologue as quatro modalidades com a conta Mercado Pago antes de vender.
 
 ## Verificação

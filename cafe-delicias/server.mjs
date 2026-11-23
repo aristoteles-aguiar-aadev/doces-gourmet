@@ -7,16 +7,44 @@ import {FileStore} from './lib/store.mjs';
 import {BlobStore} from './lib/blob-store.mjs';
 import {ShopError,text,validateProduct,quote,customerInput,categories} from './lib/shop.mjs';
 import {orderReport,orderReceipt} from './lib/order-reports.mjs';
+import {paymentType,supportsAmount,transparentPaymentInput} from './lib/transparent-payment.mjs';
 
 const root=dirname(fileURLToPath(import.meta.url));
 const secureEqual=(a,b)=>typeof a==='string'&&typeof b==='string'&&Buffer.byteLength(a)===Buffer.byteLength(b)&&timingSafeEqual(Buffer.from(a),Buffer.from(b));
 const hash=(p,s)=>scryptSync(p,s,64).toString('hex');
-const publicOrder=o=>({id:o.id,createdAt:o.createdAt,status:o.status,fulfillment:o.fulfillment,items:o.items,subtotal:o.subtotal,deliveryFee:o.deliveryFee,total:o.total,method:o.method,checkoutUrl:o.checkoutUrl||null});
+const publicOrder=o=>({id:o.id,createdAt:o.createdAt,status:o.status,fulfillment:o.fulfillment,items:o.items,subtotal:o.subtotal,deliveryFee:o.deliveryFee,total:o.total,method:o.method,checkoutUrl:o.checkoutUrl||null,
+  ...(o.transparentCheckout&&o.status==='pending'&&o.paymentId&&['pix','boleto'].includes(o.method)?{paymentId:o.paymentId}:{})});
+const checkoutReceipt=o=>({id:o.id,receiptToken:o.receiptToken,status:o.status});
+const paymentStatuses={approved:'paid',refunded:'refunded',charged_back:'charged_back',cancelled:'cancelled',rejected:'rejected',pending:'pending',in_process:'pending',authorized:'pending',in_mediation:'in_mediation'};
+const shopCsp="default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'";
+const paymentCsp=shopCsp
+  .replace("script-src 'self'","script-src 'self' https://sdk.mercadopago.com https://http2.mlstatic.com")
+  .replace("style-src 'self'","style-src 'self' 'unsafe-inline' https://http2.mlstatic.com")
+  .replace("font-src 'self'","font-src 'self' https://http2.mlstatic.com")
+  .replace("connect-src 'self'","connect-src 'self' https://*.mercadopago.com https://*.mercadopago.com.br https://*.mercadolibre.com https://*.mlstatic.com")+
+  '; frame-src https://*.mercadopago.com https://*.mercadopago.com.br https://*.mercadolibre.com';
+
+function checkoutAvailable(state) {
+  if(state.settings.catalogExample)throw new ShopError('A loja está em demonstração. O catálogo real precisa ser publicado antes de receber pedidos.',503);
+  if(!state.settings.pickupAddress)throw new ShopError('A loja precisa configurar o endereço de retirada antes de receber pedidos.',503);
+}
+
+function releasePaymentStock(state,order) {
+  if(order.stockReleased)return;
+  for(const item of order.items){
+    const product=state.products.find(product=>product.id===item.id);
+    if(product)product.stock+=item.quantity;
+  }
+  order.stockReleased=true;
+}
 
 export async function createApp(options={}) {
   const serverless=options.serverless??Boolean(process.env.VERCEL);
   const origin=process.env.PUBLIC_BASE_URL||(process.env.VERCEL_PROJECT_PRODUCTION_URL?`https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`:undefined);
-  const config={dataDir:process.env.DATA_DIR||join(root,'data'),adminPassword:process.env.ADMIN_PASSWORD,accessToken:process.env.MP_ACCESS_TOKEN,webhookSecret:process.env.MP_WEBHOOK_SECRET,baseUrl:origin,...options};
+  const config={dataDir:process.env.DATA_DIR||join(root,'data'),adminPassword:process.env.ADMIN_PASSWORD,
+    accessToken:process.env.MP_ACCESS_TOKEN,webhookSecret:process.env.MP_WEBHOOK_SECRET,baseUrl:origin,
+    transparentPublicKey:process.env.MP_TRANSPARENT_PUBLIC_KEY,transparentAccessToken:process.env.MP_TRANSPARENT_ACCESS_TOKEN,
+    transparentWebhookSecret:process.env.MP_TRANSPARENT_WEBHOOK_SECRET,...options};
   const adminUsername=(options.adminUsername??process.env.ADMIN_USERNAME)?.trim()||'admin';
   if(adminUsername.length>100)throw new Error('ADMIN_USERNAME precisa ter no máximo 100 caracteres.');
   if(config.baseUrl)config.baseUrl=new URL(config.baseUrl).origin;
@@ -40,22 +68,37 @@ export async function createApp(options={}) {
     }
   }
   if(!options.quiet)console.log(serverless?'Painel /admin: acesso inicial no Blob privado system/acesso-admin.txt.':'Painel /admin: use a senha configurada ou consulte data/acesso-admin.txt.');
-  const ready=()=>Boolean(config.accessToken&&config.webhookSecret&&/^https:\/\//.test(config.baseUrl||''));
-  async function mp(path,init={}) {
-    const response=await (options.paymentFetch||fetch)(`https://api.mercadopago.com${path}`,{...init,headers:{Authorization:`Bearer ${config.accessToken}`,'Content-Type':'application/json',...init.headers},signal:AbortSignal.timeout(20000)});
-    if(!response.ok) throw new ShopError('Não foi possível acessar o pagamento. Tente novamente em instantes.',502);
+  const publicHttps=config.baseUrl?.startsWith('https://');
+  const ready=()=>Boolean(config.accessToken&&config.webhookSecret&&publicHttps);
+  const transparentWebhookReady=()=>Boolean(config.transparentAccessToken&&config.transparentWebhookSecret&&publicHttps);
+  const transparentReady=()=>Boolean(config.transparentPublicKey&&transparentWebhookReady());
+  async function mp(path,init={},transparent=false) {
+    const accessToken=transparent?config.transparentAccessToken:config.accessToken;
+    const response=await (options.paymentFetch||fetch)(`https://api.mercadopago.com${path}`,{...init,headers:{Authorization:`Bearer ${accessToken}`,'Content-Type':'application/json',...init.headers},signal:AbortSignal.timeout(20000)});
+    if(!response.ok){
+      if((path==='/checkout/preferences'||path==='/v1/payments')&&!options.quiet){
+        const details=await response.json().catch(()=>null);
+        const codes=[details?.error,details?.code].filter(code=>typeof code==='string'&&/^[a-z][a-z0-9_]{0,79}$/i.test(code));
+        console.warn(transparent?'Mercado Pago recusou o pagamento':'Mercado Pago recusou a criação da preferência',{status:response.status,codes});
+      }
+      const error=new ShopError('Não foi possível acessar o pagamento. Tente novamente em instantes.',502);
+      error.providerStatus=response.status;
+      throw error;
+    }
     return response.json();
   }
-  async function reconcile(paymentId) {
-    const p=await mp(`/v1/payments/${encodeURIComponent(paymentId)}`);
-    await store.update(s=>{
-      const o=s.orders.find(o=>o.id===p.external_reference);if(!o)return;
+  async function recordPayment(p,transparent=false) {
+    return store.update(s=>{
+      const o=s.orders.find(o=>o.id===p.external_reference);
+      if(!o||Boolean(o.transparentCheckout)!==transparent)return;
       if(p.currency_id!=='BRL'||Math.round(Number(p.transaction_amount)*100)!==o.total) throw new ShopError('Valor do pagamento não corresponde ao pedido.',409);
-      if(['paid','refunded','charged_back'].includes(o.status)&&o.paymentId&&String(o.paymentId)!==String(p.id))return;
+      if(transparent&&p.payment_type_id!==paymentType(o.method))throw new ShopError('Meio de pagamento não corresponde ao pedido.',409);
+      if(['paid','refunded','charged_back'].includes(o.status)&&o.paymentId&&String(o.paymentId)!==String(p.id))return o;
       // Never downgrade an approved payment because of a delayed pending notification.
-      const mapping={approved:'paid',refunded:'refunded',charged_back:'charged_back',cancelled:'cancelled',rejected:'rejected',pending:'pending',in_process:'pending',authorized:'pending',in_mediation:'in_mediation'};
-      const next=mapping[p.status];if(!next)return;
-      if(['paid','refunded','charged_back'].includes(o.status)&&['pending','cancelled','rejected'].includes(next))return;
+      const next=Object.hasOwn(paymentStatuses,p.status)?paymentStatuses[p.status]:null;
+      if(!next||!/^\d{1,30}$/.test(String(p.id)))return o;
+      if(['paid','refunded','charged_back'].includes(o.status)&&['pending','cancelled','rejected'].includes(next))return o;
+      if(transparent&&o.stockReleased)return o;
       const reconciledId=String(p.id);
       if(o.paymentId!==reconciledId){
         delete o.paymentType;
@@ -64,9 +107,53 @@ export async function createApp(options={}) {
       if(typeof p.payment_type_id==='string'&&/^[a-z_]{1,40}$/.test(p.payment_type_id))o.paymentType=p.payment_type_id;
       if(Number.isSafeInteger(p.installments)&&p.installments>0)o.installments=p.installments;
       o.paymentId=reconciledId;o.status=next;o.updatedAt=new Date().toISOString();
-      // Pending/rejected attempts may be retried at the provider. Stock is held until
-      // the administrator explicitly releases an expired preference after checking it.
+      if(transparent&&['cancelled','rejected'].includes(next))releasePaymentStock(s,o);
+      return o;
     });
+  }
+  async function reconcile(paymentId,transparent=false) {
+    const payment=await mp(`/v1/payments/${encodeURIComponent(paymentId)}`,{},transparent);
+    return recordPayment(payment,transparent);
+  }
+  async function reserveCheckout(b,customer,{transparent=false,expectedTotal}={}) {
+    const fingerprint=createHash('sha256').update(JSON.stringify({items:b.items,fulfillment:b.fulfillment,method:b.method,customer})).digest('hex');
+    return store.update(s=>{
+      checkoutAvailable(s);
+      const previous=s.orders.find(o=>o.key===b.key);
+      if(previous){
+        if(previous.fingerprint!==fingerprint||Boolean(previous.transparentCheckout)!==transparent||
+            (transparent&&previous.total!==expectedTotal))throw new ShopError('Seu pedido foi alterado. Atualize a sacola.',409);
+        return {order:previous,created:false};
+      }
+      const q=quote(s,b);
+      if(transparent&&q.total!==expectedTotal)throw new ShopError('O valor do pedido mudou. Volte para conferir o total.',409);
+      const order={...q,id:randomUUID(),key:b.key,fingerprint,receiptToken:randomBytes(24).toString('hex'),customer,
+        fulfillment:b.fulfillment,method:b.method,status:'creating',createdAt:new Date().toISOString(),...(transparent?{transparentCheckout:true}:{})};
+      for(const item of q.items)s.products.find(p=>p.id===item.id).stock-=item.quantity;
+      s.orders.unshift(order);
+      return {order,created:true};
+    });
+  }
+
+  let paymentMethods,paymentMethodsUntil=0;
+  async function acceptedPaymentMethods(method,total) {
+    if(Date.now()>=paymentMethodsUntil){
+      const methods=await mp('/v1/payment_methods',{},true);
+      if(!Array.isArray(methods))throw new ShopError('Não foi possível consultar os meios de pagamento. Tente novamente.',502);
+      paymentMethods=methods;
+      paymentMethodsUntil=Date.now()+300000;
+    }
+    const offlineId=method==='pix'?'pix':method==='boleto'?'bolbradesco':null;
+    const available=paymentMethods.filter(type=>type.status==='active'&&type.payment_type_id===paymentType(method)&&
+      (!offlineId||type.id===offlineId));
+    if(!available.length)throw new ShopError('Esta forma de pagamento não está disponível. Escolha outra opção.',400);
+    const accepted=available.filter(type=>supportsAmount(type,total));
+    if(!accepted.length){
+      const minimum=Math.min(...available.map(type=>Number(type.min_allowed_amount||0)));
+      if(total/100<minimum)throw new ShopError(`O valor mínimo para essa forma de pagamento é ${minimum.toLocaleString('pt-BR',{style:'currency',currency:'BRL'})}.`,400);
+      throw new ShopError('Este valor não está disponível para essa forma de pagamento.',400);
+    }
+    return accepted;
   }
   async function body(req,max=3000000) {
     if(req.body!==undefined){const data=typeof req.body==='string'?req.body:JSON.stringify(req.body);if(Buffer.byteLength(data)>max)throw new ShopError('Solicitação muito grande.',413);try{return JSON.parse(data);}catch{throw new ShopError('Dados inválidos.');}}
@@ -78,9 +165,12 @@ export async function createApp(options={}) {
     const json=(data,status=200)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(data));};
     const printable=html=>{res.writeHead(200,{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store'});res.end(html);};
     res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','same-origin');res.setHeader('X-Frame-Options','DENY');
-    res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'");
+    res.setHeader('Content-Security-Policy',shopCsp);
     try {
       const url=new URL(req.url,'http://localhost'),path=url.pathname;
+      const transparentWebhook=path==='/api/payments/transparent-webhook';
+      const webhook=transparentWebhook||path==='/api/payments/webhook';
+      if(path==='/'&&transparentReady())res.setHeader('Content-Security-Policy',paymentCsp);
       const client=serverless?String(req.headers['x-vercel-forwarded-for']||req.headers['x-forwarded-for']||'unknown').split(',')[0].trim():req.socket.remoteAddress,now=Date.now();
       if(requestLimits.size>10000)requestLimits.clear();
       const rate=requestLimits.get(client)||{time:now,count:0};if(now-rate.time>60000){rate.time=now;rate.count=0;}requestLimits.set(client,rate);
@@ -90,7 +180,7 @@ export async function createApp(options={}) {
       const tokenHash=token&&createHash('sha256').update(token).digest('hex');
       const session=tokenHash&&(await store.read()).sessions?.[tokenHash];const admin=Boolean(session&&session.expires>now);
       if(path.startsWith('/api/admin/')&&!admin)throw new ShopError('Entre no painel para continuar.',401);
-      if(path.startsWith('/api/')&&!['GET','HEAD'].includes(req.method)&&path!=='/api/payments/webhook') {
+      if(path.startsWith('/api/')&&!['GET','HEAD'].includes(req.method)&&!webhook) {
         // Vercel routes each registered alias to this project. Compare against
         // the actual request host, rather than the canonical payment-return URL.
         // Forwarded host headers are deliberately not trusted here.
@@ -99,7 +189,7 @@ export async function createApp(options={}) {
         const expected=serverless?new URL(`https://${host}`).origin:config.baseUrl?new URL(config.baseUrl).origin:`http://${host}`;
         if(req.headers['x-shop-request']!=='1'||(req.headers.origin&&req.headers.origin!==expected))throw new ShopError('Solicitação não autorizada.',403);
       }
-      if(path==='/api/session'&&req.method==='GET')return json({authenticated:admin,paymentsReady:ready(),hosted:serverless});
+      if(path==='/api/session'&&req.method==='GET')return json({authenticated:admin,paymentsReady:ready()||transparentReady(),hosted:serverless});
       if(path==='/api/login'&&req.method==='POST'){
         const addressHash=createHash('sha256').update(client||'unknown').digest('hex');
         const allowed=await store.update(s=>{s.loginAttempts??={};for(const [key,a] of Object.entries(s.loginAttempts))if(now-a.time>900000)delete s.loginAttempts[key];const a=s.loginAttempts[addressHash]??={time:now,count:0};return ++a.count<=8;});
@@ -115,7 +205,8 @@ export async function createApp(options={}) {
       }
       if(path==='/api/logout'&&req.method==='POST'){if(tokenHash)await store.update(s=>{delete s.sessions?.[tokenHash];});res.setHeader('Set-Cookie','delicias_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0');return json({ok:true});}
       if(path==='/api/catalog'&&req.method==='GET'){
-        const s=await store.read();return json({products:s.products.filter(p=>p.active),settings:s.settings,categories,paymentsReady:ready()});
+        const s=await store.read();return json({products:s.products.filter(p=>p.active),settings:s.settings,categories,
+          paymentsReady:ready()||transparentReady(),paymentPublicKey:transparentReady()?config.transparentPublicKey:null});
       }
       if(path==='/api/admin/products'){
         if(req.method==='GET')return json({products:(await store.read()).products,categories});
@@ -143,7 +234,7 @@ export async function createApp(options={}) {
         return json({url:`/uploads/${filename}`},201);
       }
       if(path==='/api/admin/settings'){
-        if(req.method==='GET')return json({settings:(await store.read()).settings,paymentsReady:ready()});
+        if(req.method==='GET')return json({settings:(await store.read()).settings,paymentsReady:ready()||transparentReady()});
         if(req.method==='PUT'){
           const b=await body(req);if(!Number.isSafeInteger(b.deliveryFee)||b.deliveryFee<0||b.deliveryFee>100000)throw new ShopError('Taxa de entrega inválida.');
           const settings={storeName:'Dois Amores Doceria',tagline:'Mãe e Filha',deliveryEnabled:b.deliveryEnabled===true,deliveryFee:b.deliveryFee,deliveryArea:text(b.deliveryArea||'',0,200,'Área de entrega'),pickupAddress:text(b.pickupAddress||'',0,300,'Retirada'),hours:text(b.hours||'',0,200,'Horário'),whatsapp:String(b.whatsapp||'').replace(/\D/g,''),catalogExample:b.catalogExample===true};
@@ -165,29 +256,74 @@ export async function createApp(options={}) {
       const syncMatch=path.match(/^\/api\/admin\/orders\/([a-f0-9-]+)\/sync$/);
       if(syncMatch&&req.method==='POST'){
         const o=(await store.read()).orders.find(o=>o.id===syncMatch[1]);if(!o)throw new ShopError('Pedido não encontrado.',404);
-        const payments=await mp(`/v1/payments/search?external_reference=${encodeURIComponent(o.id)}&sort=date_created&criteria=desc`);
+        const transparent=Boolean(o.transparentCheckout);
+        if(transparent&&!transparentWebhookReady())throw new ShopError('A consulta de pagamentos não está configurada.',503);
+        const payments=await mp(`/v1/payments/search?external_reference=${encodeURIComponent(o.id)}&sort=date_created&criteria=desc`,{},transparent);
         // Process the approved attempt first when multiple attempts exist.
         const list=[...(payments.results||[])].sort((a,b)=>(b.status==='approved')-(a.status==='approved'));
-        for(const p of list)await reconcile(p.id);return json({ok:true});
+        for(const p of list)await reconcile(p.id,transparent);return json({ok:true});
       }
       if(path==='/api/admin/backup'&&req.method==='GET'){
         const {admin,sessions,loginAttempts,...data}=await store.read();res.setHeader('Content-Disposition','attachment; filename="backup-delicias.json"');return json(data);
+      }
+      if((path==='/api/checkout/transparent/quote'||path==='/api/checkout/transparent')&&req.method==='POST'){
+        if(!transparentReady())throw new ShopError('O checkout na loja ainda não está disponível.',503);
+        const b=await body(req,20000);
+        if(!paymentType(b?.method))throw new ShopError('Selecione o pagamento.');
+        if(typeof b.key!=='string'||!/^[a-f0-9-]{32,64}$/.test(b.key))throw new ShopError('Identificação do checkout inválida.');
+        const customer=customerInput(b);
+
+        if(path==='/api/checkout/transparent/quote'){
+          const state=await store.read();
+          checkoutAvailable(state);
+          const {total}=quote(state,b);
+          const accepted=await acceptedPaymentMethods(b.method,total);
+          return json({total,paymentMethodIds:accepted.map(method=>method.id)});
+        }
+
+        const {expectedTotal}=b;
+        if(!Number.isSafeInteger(expectedTotal)||expectedTotal<1)throw new ShopError('Confira o total do pedido.');
+        const paymentInput=transparentPaymentInput(b.payment,b.method,customer);
+        const eligible=await acceptedPaymentMethods(b.method,expectedTotal);
+        if(!eligible.some(type=>type.id===paymentInput.payment_method_id))throw new ShopError('Este meio de pagamento não está disponível para o pedido.');
+        const {order,created}=await reserveCheckout(b,customer,{transparent:true,expectedTotal});
+        if(!created)return json(checkoutReceipt(order));
+
+        try {
+          const payment=await mp('/v1/payments',{
+            method:'POST',headers:{'X-Idempotency-Key':order.id},body:JSON.stringify({
+              ...paymentInput,transaction_amount:order.total/100,description:'Dois Amores Doceria',
+              external_reference:order.id,notification_url:`${config.baseUrl}/api/payments/transparent-webhook?source_news=webhooks`,
+            }),
+          },true);
+          const updated=payment.external_reference===order.id?await recordPayment(payment,true):null;
+          return json(checkoutReceipt(updated||order));
+        } catch(error) {
+          // A timeout or a provider failure may occur after the payment was accepted.
+          // Keep its reservation and let the webhook or admin reconcile the attempt.
+          if(![400,401,403,422].includes(error.providerStatus)){
+            if(!options.quiet)console.warn('Pagamento aguardando conciliação', {orderId:order.id, status:error.providerStatus});
+            return json(checkoutReceipt(order));
+          }
+          const rejected=await store.update(state=>{
+            const currentOrder=state.orders.find(saved=>saved.id===order.id);
+            if(currentOrder.status==='creating'){
+              currentOrder.status='rejected';
+              currentOrder.updatedAt=new Date().toISOString();
+              releasePaymentStock(state,currentOrder);
+            }
+            return currentOrder;
+          });
+          return json(checkoutReceipt(rejected));
+        }
       }
       if(path==='/api/checkout'&&req.method==='POST'){
         if(!ready())throw new ShopError('Os pagamentos ainda não foram ativados pela loja. Nenhuma cobrança foi realizada.',503);
         const b=await body(req,20000);if(!['pix','boleto','credit','debit'].includes(b.method))throw new ShopError('Selecione o pagamento.');
         if(!/^[a-f0-9-]{32,64}$/.test(b.key||''))throw new ShopError('Identificação do checkout inválida.');
+        if(transparentReady())throw new ShopError('Atualize a página para pagar no checkout da loja.',409);
         const customer=customerInput(b);
-        const fingerprint=createHash('sha256').update(JSON.stringify({items:b.items,fulfillment:b.fulfillment,method:b.method,customer})).digest('hex');
-        let order=await store.update(s=>{
-          if(s.settings.catalogExample)throw new ShopError('A loja está em demonstração. O catálogo real precisa ser publicado antes de receber pedidos.',503);
-          if(!s.settings.pickupAddress)throw new ShopError('A loja precisa configurar o endereço de retirada antes de receber pedidos.',503);
-          const previous=s.orders.find(o=>o.key===b.key);
-          if(previous){if(previous.fingerprint!==fingerprint)throw new ShopError('Seu pedido foi alterado. Atualize a sacola.',409);return previous;}
-          const q=quote(s,b);const o={...q,id:randomUUID(),key:b.key,fingerprint,receiptToken:randomBytes(24).toString('hex'),customer,fulfillment:b.fulfillment,method:b.method,status:'creating',createdAt:new Date().toISOString()};
-          for(const i of q.items)s.products.find(p=>p.id===i.id).stock-=i.quantity;
-          s.orders.unshift(o);return o;
-        });
+        const {order}=await reserveCheckout(b,customer);
         if(order.checkoutUrl)return json({id:order.id,url:order.checkoutUrl,receiptToken:order.receiptToken});
         if(order.status!=='creating')throw new ShopError('Este pedido não pode ser reenviado. Atualize sua sacola.',409);
         const returnUrl=`${config.baseUrl}/?pedido=${order.id}&chave=${order.receiptToken}`;
@@ -216,14 +352,15 @@ export async function createApp(options={}) {
           throw e;
         }
       }
-      if(path==='/api/payments/webhook'&&req.method==='POST'){
-        if(!ready())throw new ShopError('Pagamentos não configurados.',503);
+      if(webhook&&req.method==='POST'){
+        if(!(transparentWebhook?transparentWebhookReady():ready()))throw new ShopError('Pagamentos não configurados.',503);
         const b=await body(req,20000);if(b.type!=='payment')return json({received:true});
         const id=url.searchParams.get('data.id');const parts=Object.fromEntries(String(req.headers['x-signature']||'').split(',').map(p=>p.trim().split('=')));
         const requestId=req.headers['x-request-id'];if(!id||!requestId||!parts.ts||!/^\d+$/.test(parts.ts)||!/^\d+$/.test(id))throw new ShopError('Assinatura inválida.',401);
-        const signature=createHmac('sha256',config.webhookSecret).update(`id:${id.toLowerCase()};request-id:${requestId};ts:${parts.ts};`).digest('hex');
+        const secret=transparentWebhook?config.transparentWebhookSecret:config.webhookSecret;
+        const signature=createHmac('sha256',secret).update(`id:${id.toLowerCase()};request-id:${requestId};ts:${parts.ts};`).digest('hex');
         if(!secureEqual(signature,parts.v1))throw new ShopError('Assinatura inválida.',401);
-        await reconcile(id);return json({received:true});
+        await reconcile(id,transparentWebhook);return json({received:true});
       }
       const orderMatch=path.match(/^\/api\/orders\/([a-f0-9-]+)$/);
       if(orderMatch&&req.method==='GET'){

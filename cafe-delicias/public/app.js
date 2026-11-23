@@ -3,6 +3,14 @@ const money=n=>(n/100).toLocaleString('pt-BR',{style:'currency',currency:'BRL'})
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const icon=id=>`<svg class="icon" aria-hidden="true"><use href="#i-${id}"/></svg>`;
 let catalog={products:[],settings:{},categories:[],paymentsReady:false}, category='Todos',toastTimer,checkoutKey=crypto.randomUUID(),cart=[];
+const paymentOptions={
+  pix:{label:'Pix',method:'bankTransfer',form:'bankTransferForm'},
+  boleto:{label:'Boleto',method:'ticket',form:'ticketForm'},
+  credit:{label:'Crédito',method:'creditCard',form:'creditCardForm'},
+  debit:{label:'Débito',method:'debitCard',form:'debitCardForm'},
+};
+let paymentSdk, paymentBrick, paymentVersion=0, paymentSubmitting=false;
+let statusBrick, statusVersion=0;
 try{const saved=JSON.parse(localStorage.getItem('delicias-cart-v1')||'[]');if(Array.isArray(saved))cart=saved.filter(i=>typeof i.id==='string'&&Number.isInteger(i.quantity)&&i.quantity>0&&i.quantity<=99).slice(0,50);}catch{}
 function toast(message){$('#toast').textContent=message;$('#toast').hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('#toast').hidden=true,3600);}
 function saveCart(){try{localStorage.setItem('delicias-cart-v1',JSON.stringify(cart));}catch{}checkoutKey=crypto.randomUUID();updateCount();}
@@ -35,14 +43,195 @@ async function checkout(){
   try{await loadCatalog();renderCart();if(!cart.length||cartItems().some(i=>!i.product||i.quantity>i.product.stock))return toast('Confira os itens e o estoque na sua sacola.');
     $('#cart-dialog').close();const form=$('#checkout-form');form.elements.fulfillment.value='pickup';form.elements.fulfillment[1].disabled=!catalog.settings.deliveryEnabled;
     const ready=catalog.paymentsReady&&!catalog.settings.catalogExample&&Boolean(catalog.settings.pickupAddress);$('#pay-button').disabled=!ready;
+    $('#payment-help').textContent=catalog.paymentPublicKey?'Escolha uma forma de pagamento e continue na loja. A preparação começa após a confirmação do pagamento.':'Você concluirá o pagamento no ambiente do Mercado Pago.';
     $('#payment-notice').textContent=ready?'O pedido fica reservado enquanto você conclui o pagamento. O boleto depende de compensação bancária.':'Estamos preparando a loja para receber pedidos. Você pode conhecer o checkout; os pagamentos ainda não estão disponíveis e nenhuma cobrança será feita.';
     $('#checkout-error').hidden=true;checkoutSummary();$('#checkout-dialog').showModal();
   }catch(e){toast(e.message);}
 }
 $('#checkout-form').addEventListener('change',()=>{checkoutKey=crypto.randomUUID();checkoutSummary();});
-$('#checkout-form').addEventListener('submit',async e=>{e.preventDefault();const form=e.target;if(!form.reportValidity())return;const button=$('#pay-button');button.disabled=true;button.textContent='Preparando seu pagamento…';$('#checkout-error').hidden=true;try{const b=Object.fromEntries(new FormData(form));const result=await api('/api/checkout',{method:'POST',body:JSON.stringify({...b,items:cart,key:checkoutKey})});try{sessionStorage.setItem('delicias-pedido',JSON.stringify({id:result.id,key:result.receiptToken}));}catch{}location.assign(result.url);}catch(e){$('#checkout-error').textContent=e.message;$('#checkout-error').hidden=false;button.disabled=false;button.innerHTML=`Ir para pagamento ${icon('arrow')}`;}});
+
+function loadPaymentSdk(){
+  if(window.MercadoPago)return Promise.resolve(window.MercadoPago);
+  if(paymentSdk)return paymentSdk;
+  paymentSdk=new Promise((resolve,reject)=>{
+    const script=document.createElement('script');
+    script.src='https://sdk.mercadopago.com/js/v2';
+    function failed(){
+      clearTimeout(timeout);
+      script.remove();
+      paymentSdk=undefined;
+      reject(new Error('Não foi possível abrir o pagamento. Tente novamente.'));
+    }
+    const timeout=setTimeout(failed,15000);
+    script.onerror=failed;
+    script.onload=()=>{
+      if(!window.MercadoPago)return failed();
+      clearTimeout(timeout);
+      resolve(window.MercadoPago);
+    };
+    document.head.append(script);
+  });
+  return paymentSdk;
+}
+
+function saveReceipt(result,transparent=false){
+  try{sessionStorage.setItem('delicias-pedido',JSON.stringify({id:result.id,key:result.receiptToken,transparent}));}catch{}
+}
+
+function savedReceipt(){
+  try{return JSON.parse(sessionStorage.getItem('delicias-pedido')||'null');}catch{return null;}
+}
+
+function showPaymentError(message){
+  $('#payment-error').textContent=message;
+  $('#payment-error').hidden=false;
+}
+
+function resetPaymentForm(){
+  paymentVersion++;
+  paymentBrick?.unmount();
+  paymentBrick=undefined;
+  $('#payment-fields').replaceChildren();
+}
+
+async function submitTransparentPayment(order,total,formData){
+  if(paymentSubmitting)return;
+  const {token,installments,payment_method_id,issuer_id,payer}=formData;
+  const payment={token,installments,payment_method_id,issuer_id,payer:{identification:payer?.identification,address:payer?.address}};
+  paymentSubmitting=true;
+  $('#payment-back').disabled=true;
+  $('#payment-error').hidden=true;
+  try{
+    const result=await api('/api/checkout/transparent',{method:'POST',body:JSON.stringify({...order,expectedTotal:total,payment})});
+    saveReceipt(result,true);
+    if(['rejected','cancelled'].includes(result.status))checkoutKey=crypto.randomUUID();
+    $('#payment-dialog').close();
+    await receipt(result.id,result.receiptToken);
+  }catch(error){
+    showPaymentError(error.message);
+    throw error;
+  }finally{
+    paymentSubmitting=false;
+    $('#payment-back').disabled=false;
+  }
+}
+
+async function openTransparentPayment(order){
+  const checkoutDialog=$('#checkout-dialog');
+  const {total,paymentMethodIds}=await api('/api/checkout/transparent/quote',{method:'POST',body:JSON.stringify(order)});
+  const MercadoPago=await loadPaymentSdk();
+  if(!checkoutDialog.open||order.key!==checkoutKey)return;
+
+  const option=paymentOptions[order.method];
+  const dialog=$('#payment-dialog');
+  const version=++paymentVersion;
+  const active=()=>dialog.open&&version===paymentVersion;
+  $('#payment-title').textContent=`Pagamento com ${option.label}`;
+  $('#payment-total').textContent=money(total);
+  $('#payment-loading').hidden=false;
+  $('#payment-error').hidden=true;
+  checkoutDialog.close();
+  dialog.showModal();
+  const failed=()=>{
+    if(!active())return;
+    $('#payment-loading').hidden=true;
+    if($('#payment-error').hidden)showPaymentError('Não foi possível completar esta etapa. Confira os dados ou volte e tente novamente.');
+  };
+  try{
+    const controller=await new MercadoPago(catalog.paymentPublicKey,{locale:'pt-BR'}).bricks().create('payment','payment-fields',{
+      initialization:{amount:total/100,payer:{email:order.email}},
+      customization:{paymentMethods:{[option.method]:paymentMethodIds,...(order.method==='debit'?{maxInstallments:1}:{})},
+        visual:{defaultPaymentOption:{[option.form]:true}}},
+      callbacks:{
+        onReady:()=>{if(active())$('#payment-loading').hidden=true;},
+        onError:failed,
+        onSubmit:({formData})=>active()?submitTransparentPayment(order,total,formData):Promise.resolve(),
+      },
+    });
+    if(active())paymentBrick=controller;
+    else controller.unmount();
+  }catch{failed();}
+}
+
+$('#payment-back').onclick=()=>{
+  if(paymentSubmitting)return;
+  $('#payment-dialog').close();
+  $('#checkout-dialog').showModal();
+};
+$('#payment-dialog').addEventListener('cancel',event=>{event.preventDefault();$('#payment-back').click();});
+$('#payment-dialog').addEventListener('close',resetPaymentForm);
+
+$('#checkout-form').addEventListener('submit',async event=>{
+  event.preventDefault();
+  const form=event.target;
+  const button=$('#pay-button');
+  if(button.disabled||!form.reportValidity())return;
+  button.disabled=true;
+  button.textContent='Preparando seu pagamento…';
+  const errorMessage=$('#checkout-error');
+  errorMessage.hidden=true;
+  try{
+    const order={...Object.fromEntries(new FormData(form)),items:cart.map(item=>({...item})),key:checkoutKey};
+    if(catalog.paymentPublicKey)await openTransparentPayment(order);
+    else{
+      const result=await api('/api/checkout',{method:'POST',body:JSON.stringify(order)});
+      saveReceipt(result);
+      location.assign(result.url);
+    }
+  }catch(error){
+    errorMessage.textContent=error.message;
+    errorMessage.hidden=false;
+  }finally{
+    button.disabled=false;
+    button.innerHTML=`Ir para pagamento ${icon('arrow')}`;
+  }
+});
 const statusLabels={creating:'Preparando pagamento',pending:'Aguardando pagamento',paid:'Pagamento confirmado ♡',rejected:'Pagamento não aprovado',cancelled:'Pagamento cancelado',refunded:'Pagamento reembolsado',charged_back:'Pagamento contestado',in_mediation:'Pagamento em análise'};
-async function receipt(id,key){try{const {order:o}=await api(`/api/orders/${encodeURIComponent(id)}?key=${encodeURIComponent(key)}`);$('#receipt-content').innerHTML=`${icon(o.status==='paid'?'heart':'shield')}<h2 id="receipt-title">${o.status==='paid'?'Seu carinho está a caminho!':'Acompanhe seu pedido'}</h2><span class="receipt-status">${esc(statusLabels[o.status]||o.status)}</span><p>Pedido ${esc(o.id.slice(0,8).toUpperCase())}<br>${o.status==='paid'?'Recebemos a confirmação do pagamento.':'A confirmação é feita pelo provedor. Boletos podem levar dias úteis para compensar.'}</p>${o.items.map(i=>`<div class="summary-line"><span>${i.quantity} × ${esc(i.name)}</span><span>${money(i.price*i.quantity)}</span></div>`).join('')}<div class="summary-line total"><strong>Total</strong><strong>${money(o.total)}</strong></div><button class="button secondary full" id="refresh-order">Atualizar status</button>${o.status==='pending'&&o.checkoutUrl?`<a class="button primary full" href="${esc(o.checkoutUrl)}">Retomar pagamento ${icon('arrow')}</a>`:''}`;$('#refresh-order').onclick=()=>receipt(id,key);if(!$('#receipt-dialog').open)$('#receipt-dialog').showModal();if(o.status==='paid'){cart=[];saveCart();}}catch(e){toast(e.message);}}
+
+function resetPaymentStatus(){
+  statusVersion++;
+  statusBrick?.unmount();
+  statusBrick=undefined;
+}
+
+async function showPaymentStatus(paymentId){
+  const version=statusVersion;
+  const container=$('#payment-status-fields');
+  const active=()=>$('#receipt-dialog').open&&version===statusVersion;
+  const failed=()=>{
+    if(active())container.textContent='Não foi possível exibir as instruções de pagamento. Atualize o status para tentar novamente.';
+  };
+  try{
+    const publicKey=catalog.paymentPublicKey||(await api('/api/catalog')).paymentPublicKey;
+    if(!publicKey)return failed();
+    const MercadoPago=await loadPaymentSdk();
+    if(!active())return;
+    container.replaceChildren();
+    const controller=await new MercadoPago(publicKey,{locale:'pt-BR'}).bricks().create('statusScreen','payment-status-fields',{
+      initialization:{paymentId},callbacks:{onReady:()=>{},onError:failed},
+    });
+    if(active())statusBrick=controller;
+    else controller.unmount();
+  }catch{failed();}
+}
+
+async function receipt(id,key){
+  try{
+    const {order:o}=await api(`/api/orders/${encodeURIComponent(id)}?key=${encodeURIComponent(key)}`);
+    resetPaymentStatus();
+    const message={paid:'Recebemos a confirmação do pagamento.',rejected:'O pagamento foi recusado. Volte à sacola para tentar novamente.',
+      creating:'Estamos verificando o pagamento. Atualize o status antes de tentar pagar novamente.'}[o.status]||'O pagamento será confirmado pelo Mercado Pago.';
+    $('#receipt-content').innerHTML=`${icon(o.status==='paid'?'heart':'shield')}<h2 id="receipt-title">${o.status==='paid'?'Seu carinho está a caminho!':'Acompanhe seu pedido'}</h2><span class="receipt-status">${esc(statusLabels[o.status]||o.status)}</span><p>Pedido ${esc(o.id.slice(0,8).toUpperCase())}<br>${message}</p>${o.items.map(i=>`<div class="summary-line"><span>${i.quantity} × ${esc(i.name)}</span><span>${money(i.price*i.quantity)}</span></div>`).join('')}<div class="summary-line total"><strong>Total</strong><strong>${money(o.total)}</strong></div>${o.paymentId?'<div id="payment-status-fields" role="status">Carregando instruções de pagamento…</div>':''}<button class="button secondary full" id="refresh-order">Atualizar status</button>${o.status==='pending'&&o.checkoutUrl?`<a class="button primary full" href="${esc(o.checkoutUrl)}">Retomar pagamento ${icon('arrow')}</a>`:''}`;
+    $('#refresh-order').onclick=()=>receipt(id,key);
+    if(!$('#receipt-dialog').open)$('#receipt-dialog').showModal();
+    if(o.paymentId)await showPaymentStatus(o.paymentId);
+    if(['paid','cancelled','rejected','refunded','charged_back'].includes(o.status)&&savedReceipt()?.id===id){
+      try{sessionStorage.removeItem('delicias-pedido');}catch{}
+    }
+    if(o.status==='paid'){cart=[];saveCart();}
+  }catch(error){toast(error.message);}
+}
+$('#receipt-dialog').addEventListener('close',resetPaymentStatus);
 document.addEventListener('click',e=>{
   const close=e.target.closest('[data-close]');if(close){$('#'+close.dataset.close).close();return;}
   const addButton=e.target.closest('[data-add]');if(addButton){add(addButton.dataset.add);return;}
@@ -55,7 +244,14 @@ document.addEventListener('click',e=>{
 });
 $('#open-cart').addEventListener('click',async()=>{try{await loadCatalog();}catch(e){toast(e.message);}renderCart();$('#cart-dialog').showModal();});
 $('#search').addEventListener('input',renderProducts);$('#sort').addEventListener('change',renderProducts);
-$$('dialog').forEach(dialog=>dialog.addEventListener('click',e=>{if(e.target===dialog){const r=dialog.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)dialog.close();}}));
+$$('dialog:not(#payment-dialog)').forEach(dialog=>dialog.addEventListener('click',e=>{if(e.target===dialog){const r=dialog.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)dialog.close();}}));
 window.addEventListener('storage',e=>{if(e.key==='delicias-cart-v1'){try{const next=JSON.parse(e.newValue||'[]');if(Array.isArray(next)){cart=next.filter(i=>typeof i.id==='string'&&Number.isInteger(i.quantity)&&i.quantity>0&&i.quantity<=99);updateCount();if($('#cart-dialog').open)renderCart();}}catch{}}});
 images();updateCount();loadCatalog().catch(e=>{$('#products').innerHTML=`<div class="empty-state"><h3>Não conseguimos abrir o cardápio</h3><p>${esc(e.message)}</p><button class="button secondary" id="reload-catalog">Tentar novamente</button></div>`;$('#reload-catalog').onclick=()=>location.reload();});
-const params=new URLSearchParams(location.search);if(params.has('pedido')&&params.has('chave')){receipt(params.get('pedido'),params.get('chave'));history.replaceState(null,'','/');}
+const params=new URLSearchParams(location.search);
+if(params.has('pedido')&&params.has('chave')){
+  receipt(params.get('pedido'),params.get('chave'));
+  history.replaceState(null,'','/');
+}else{
+  const saved=savedReceipt();
+  if(saved?.transparent&&saved.id&&saved.key)receipt(saved.id,saved.key);
+}

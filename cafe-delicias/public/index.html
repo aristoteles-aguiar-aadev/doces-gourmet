@@ -35,7 +35,77 @@
 <footer><div class="container footer-main"><div><a class="wordmark footer-brand" href="/"><span class="wordmark-name">Dois Amores</span><small class="wordmark-caption"><span aria-hidden="true">&#9829;</span> Doceria <span aria-hidden="true">&#9829;</span></small></a><p>Feito com amor, para o seu<br>dia ser mais doce.</p></div><div><h3>Uma delícia de loja</h3><a href="#cardapio">Nosso cardápio</a><a href="#historia">Nossa história</a><a href="#como-pedir">Como pedir</a></div><div><h3>Vamos conversar?</h3><p id="contact-info">Informações de contato em breve.</p><a id="whatsapp-link" hidden target="_blank" rel="noopener">Fale pelo WhatsApp ↗</a><p id="hours-info"></p></div><div><h3>Pague do seu jeito</h3><div class="payment-tags"><span>PIX</span><span>BOLETO</span><span>CRÉDITO</span><span>DÉBITO</span></div><p><svg class="icon tiny"><use href="#i-shield"/></svg> Checkout protegido pelo Mercado Pago</p></div></div><div class="container footer-bottom"><span>© <span id="year"></span> Dois Amores Doceria</span><span>Feito com carinho <span class="pink-heart">♡</span></span><a href="/admin">Área da loja ↗</a></div></footer>
 <dialog id="cart-dialog" class="drawer" aria-labelledby="cart-title"><div class="dialog-header"><div><span class="eyebrow">UM POUQUINHO DE FELICIDADE</span><h2 id="cart-title">Sua sacola <em>de delícias</em></h2></div><button class="icon-button" data-close="cart-dialog" aria-label="Fechar sacola"><svg class="icon"><use href="#i-close"/></svg></button></div><div id="cart-content"></div></dialog>
 <dialog id="product-dialog" class="product-dialog" aria-labelledby="detail-title"><button class="icon-button modal-close" data-close="product-dialog" aria-label="Fechar produto"><svg class="icon"><use href="#i-close"/></svg></button><div id="product-detail"></div></dialog>
-<dialog id="checkout-dialog" class="checkout-dialog" aria-labelledby="checkout-title"><div class="dialog-header"><div><span class="eyebrow">FALTA POUCO PARA A PARTE MAIS DOCE</span><h2 id="checkout-title">Finalize <em>seu pedido</em></h2></div><button class="icon-button" data-close="checkout-dialog" aria-label="Fechar checkout"><svg class="icon"><use href="#i-close"/></svg></button></div><form id="checkout-form"><div class="checkout-columns"><div><h3><span class="number-dot">1</span> Seus dados</h3><label>Nome completo<input name="name" autocomplete="name" minlength="3" maxlength="100" required placeholder="Como podemos chamar você?"></label><div class="form-row"><label>E-mail<input name="email" type="email" autocomplete="email" maxlength="150" required placeholder="voce@email.com"></label><label>Telefone com DDD<input name="phone" type="tel" autocomplete="tel-national" pattern="[0-9 ()+\-]{10,20}" maxlength="20" required placeholder="(85) 99999-9999"></label></div><h3><span class="number-dot">2</span> Como quer receber?</h3><div class="choice-row"><label class="choice"><input name="fulfillment" type="radio" value="pickup" checked> Retirar na loja</label><label class="choice" id="delivery-choice"><input name="fulfillment" type="radio" value="delivery"> Receber em casa</label></div><p class="field-help" id="fulfillment-info"></p><label id="address-field" hidden>Endereço completo<textarea name="address" autocomplete="street-address" minlength="10" maxlength="400" placeholder="Rua, número, bairro, cidade, CEP e complemento"></textarea></label><label>Um recadinho para nós <span class="optional">(opcional)</span><textarea name="notes" maxlength="400" placeholder="Alguma observação sobre seu pedido?"></textarea></label><h3><span class="number-dot">3</span> Pagamento</h3><div class="payment-choices"><label class="choice"><input name="method" value="pix" type="radio" checked><span>◈ <strong>PIX</strong><small>Pagamento instantâneo</small></span></label><label class="choice"><input name="method" value="boleto" type="radio"><span>▥ <strong>Boleto</strong><small>Após compensação</small></span></label><label class="choice"><input name="method" value="credit" type="radio"><span>▰ <strong>Crédito</strong><small>Cartão de crédito</small></span></label><label class="choice"><input name="method" value="debit" type="radio"><span>▰ <strong>Débito</strong><small>Conforme disponibilidade</small></span></label></div><p class="field-help">Você concluirá o pagamento no ambiente do Mercado Pago. A disponibilidade depende da conta, do cartão e do provedor. A preparação começa após a confirmação do pagamento.</p></div><aside class="order-summary"><h3>Seu momento doce</h3><div id="checkout-summary"></div><p class="payment-notice" id="payment-notice"></p><label class="consent"><input type="checkbox" name="consent" required><span>Concordo com o uso dos meus dados para processar este pedido e com as condições de recebimento informadas.</span></label><div id="checkout-error" class="error-message" role="alert" hidden></div><button class="button primary full" id="pay-button" type="submit">Ir para pagamento <svg class="icon"><use href="#i-arrow"/></svg></button><span class="secure-note"><svg class="icon tiny"><use href="#i-shield"/></svg> Seus dados de cartão ficam com o provedor</span></aside></div></form></dialog>
-<dialog id="receipt-dialog" class="receipt-dialog" aria-labelledby="receipt-title"><button class="icon-button modal-close" data-close="receipt-dialog" aria-label="Fechar pedido"><svg class="icon"><use href="#i-close"/></svg></button><div id="receipt-content"></div></dialog>
+<dialog id="checkout-dialog" class="checkout-dialog" aria-labelledby="checkout-title">
+    <div class="dialog-header">
+      <div><span class="eyebrow">FALTA POUCO PARA A PARTE MAIS DOCE</span>
+        <h2 id="checkout-title">Finalize <em>seu pedido</em></h2>
+      </div><button class="icon-button" data-close="checkout-dialog" aria-label="Fechar checkout"><svg class="icon">
+          <use href="#i-close" />
+        </svg></button>
+    </div>
+    <form id="checkout-form">
+      <div class="checkout-columns">
+        <div>
+          <h3><span class="number-dot">1</span> Seus dados</h3><label>Nome completo<input name="name"
+              autocomplete="name" minlength="3" maxlength="100" required
+              placeholder="Como podemos chamar você?"></label>
+          <div class="form-row"><label>E-mail<input name="email" type="email" autocomplete="email" maxlength="150"
+                required placeholder="voce@email.com"></label><label>Telefone com DDD<input name="phone" type="tel"
+                autocomplete="tel-national" pattern="[0-9 ()+\-]{10,20}" maxlength="20" required
+                placeholder="(85) 99999-9999"></label></div>
+          <h3><span class="number-dot">2</span> Como quer receber?</h3>
+          <div class="choice-row"><label class="choice"><input name="fulfillment" type="radio" value="pickup" checked>
+              Retirar na loja</label><label class="choice" id="delivery-choice"><input name="fulfillment" type="radio"
+                value="delivery"> Receber em casa</label></div>
+          <p class="field-help" id="fulfillment-info"></p><label id="address-field" hidden>Endereço completo<textarea
+              name="address" autocomplete="street-address" minlength="10" maxlength="400"
+              placeholder="Rua, número, bairro, cidade, CEP e complemento"></textarea></label><label>Um recadinho para
+            nós <span class="optional">(opcional)</span><textarea name="notes" maxlength="400"
+              placeholder="Alguma observação sobre seu pedido?"></textarea></label>
+          <h3><span class="number-dot">3</span> Pagamento</h3>
+          <div class="payment-choices"><label class="choice"><input name="method" value="pix" type="radio"
+                checked><span>◈ <strong>PIX</strong><small>Pagamento instantâneo</small></span></label>
+            <label class="choice"><input name="method" value="boleto" type="radio">
+              <span>▥ <strong>Boleto</strong><small>Após compensação</small></span></label>
+                <label class="choice"><input name="method" value="credit"
+                type="radio"><span>▰ <strong>Crédito</strong><small>Cartão de crédito</small></span></label><label
+              class="choice"><input name="method" value="debit" type="radio"><span>▰
+                <strong>Débito</strong><small>Conforme disponibilidade</small></span></label></div>
+          <p class="field-help" id="payment-help">Você concluirá o pagamento no ambiente do Mercado Pago. A disponibilidade depende da
+            conta, do cartão e do provedor. A preparação começa após a confirmação do pagamento.</p>
+        </div>
+        <aside class="order-summary">
+          <h3>Seu momento doce</h3>
+          <div id="checkout-summary"></div>
+          <p class="payment-notice" id="payment-notice"></p><label class="consent"><input type="checkbox" name="consent"
+              required><span>Concordo com o uso dos meus dados para processar este pedido e com as condições de
+              recebimento informadas.</span></label>
+          <div id="checkout-error" class="error-message" role="alert" hidden></div><button class="button primary full"
+            id="pay-button" type="submit">Ir para pagamento <svg class="icon">
+              <use href="#i-arrow" />
+            </svg></button><span class="secure-note"><svg class="icon tiny">
+              <use href="#i-shield" />
+            </svg> Seus dados de cartão ficam com o provedor</span>
+        </aside>
+      </div>
+    </form>
+  </dialog>
+  <dialog id="payment-dialog" class="payment-dialog" aria-labelledby="payment-title">
+    <div class="dialog-header">
+      <h2 id="payment-title">Pagamento</h2>
+      <button type="button" class="icon-button" id="payment-back" aria-label="Voltar aos dados do pedido"><svg class="icon" aria-hidden="true">
+          <use href="#i-close" />
+        </svg></button>
+    </div>
+    <div class="payment-dialog-body">
+      <div class="summary-line"><span>Total do pedido</span><strong id="payment-total"></strong></div>
+      <p id="payment-loading" role="status">Carregando pagamento…</p>
+      <div id="payment-error" class="error-message" role="alert" hidden></div>
+      <div id="payment-fields"></div>
+      <p class="secure-note"><svg class="icon tiny" aria-hidden="true"><use href="#i-shield" /></svg>
+        Pagamento protegido pelo Mercado Pago</p>
+    </div>
+  </dialog>
+  <dialog id="receipt-dialog" class="receipt-dialog" aria-labelledby="receipt-title"><button class="icon-button modal-close" data-close="receipt-dialog" aria-label="Fechar pedido"><svg class="icon"><use href="#i-close"/></svg></button><div id="receipt-content"></div></dialog>
 <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 </body></html>

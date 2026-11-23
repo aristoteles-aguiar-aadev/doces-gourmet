@@ -47,3 +47,10 @@
 .order-items td:not(:first-child) { white-space: nowrap; }
 .order-items small { display: block; margin-top: 3px; white-space: pre-line; }
 .order-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+
+.payment-dialog { width: min(560px, calc(100% - 24px)); }
+.payment-dialog .dialog-header h2 { margin-top: 0; }
+.payment-dialog-body { padding: clamp(14px, 4vw, 28px); }
+.payment-dialog-body > .summary-line { margin-bottom: 16px; }
+#payment-loading, #payment-status-fields { font-size: 13px; }
+#payment-status-fields { margin-top: 16px; text-align: left; overflow-wrap: anywhere; }
