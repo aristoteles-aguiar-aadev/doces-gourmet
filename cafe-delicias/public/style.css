@@ -11,3 +11,21 @@
 .hero-spark,.hero-flower,.banner-flower{display:block;width:1em;height:1em;fill:none;stroke:currentColor;stroke-linecap:round;stroke-linejoin:round;pointer-events:none;}
 
 .header-wordmark img{width:7.9em;height:auto;margin:-.15em}
+
+.footer-bottom.footer-developer {
+  align-items: center;
+  justify-content: center;
+  gap: 6px 12px;
+  padding: 10px 0;
+  font-size: 12px;
+}
+.footer-developer a {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--cream);
+  font-size: 14px;
+}
+.footer-developer img {
+  object-fit: contain;
+}

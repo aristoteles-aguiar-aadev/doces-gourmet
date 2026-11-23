@@ -215,6 +215,8 @@ export async function createApp(options={}) {
       if(path.startsWith('/api/'))throw new ShopError('Rota não encontrada.',404);
       if(req.method!=='GET'&&req.method!=='HEAD')throw new ShopError('Método não permitido.',405);
       const allowed=new Map([['/','index.html'],['/admin','admin.html'],['/admin/','admin.html'],['/style.css','style.css'],['/app.js','app.js'],['/admin.js','admin.js'],['/marca.jpeg','marca.jpeg'],['/favicon.svg','favicon.svg'],['/dois-amores-doceria-cabecalho.png','dois-amores-doceria-cabecalho.png']]);
+      allowed.set('/devlab-logo.png','devlab-logo.png');
+      allowed.set('/marca.webp','marca.webp');
       let filename=allowed.has(path)?join(root,'public',allowed.get(path)):null;
       if(/^\/uploads\/[a-f0-9-]+\.(jpg|png|webp)$/.test(path))filename=join(config.dataDir,path.slice(1));
       if(!filename)throw new ShopError('Página não encontrada.',404);
