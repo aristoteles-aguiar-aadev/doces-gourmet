@@ -42,7 +42,14 @@ export async function createApp(options={}) {
   const ready=()=>Boolean(config.accessToken&&config.webhookSecret&&/^https:\/\//.test(config.baseUrl||''));
   async function mp(path,init={}) {
     const response=await (options.paymentFetch||fetch)(`https://api.mercadopago.com${path}`,{...init,headers:{Authorization:`Bearer ${config.accessToken}`,'Content-Type':'application/json',...init.headers},signal:AbortSignal.timeout(20000)});
-    if(!response.ok) throw new ShopError('Não foi possível acessar o pagamento. Tente novamente em instantes.',502);
+    if(!response.ok){
+      if(path==='/checkout/preferences'&&!options.quiet){
+        const details=await response.json().catch(()=>null);
+        const codes=[details?.error,details?.code].filter(code=>typeof code==='string'&&/^[a-z][a-z0-9_]{0,79}$/i.test(code));
+        console.warn('Mercado Pago recusou a criação da preferência',{status:response.status,codes});
+      }
+      throw new ShopError('Não foi possível acessar o pagamento. Tente novamente em instantes.',502);
+    }
     return response.json();
   }
   async function reconcile(paymentId) {
