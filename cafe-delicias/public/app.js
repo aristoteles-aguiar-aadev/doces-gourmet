@@ -102,7 +102,8 @@ async function submitTransparentPayment(order,total,formData){
   $('#payment-back').disabled=true;
   $('#payment-error').hidden=true;
   try{
-    const result=await api('/api/checkout/transparent',{method:'POST',body:JSON.stringify({...order,expectedTotal:total,payment})});
+    const path=catalog.ordersCheckout?'/api/checkout/order':'/api/checkout/transparent';
+    const result=await api(path,{method:'POST',body:JSON.stringify({...order,expectedTotal:total,payment})});
     saveReceipt(result,true);
     if(['rejected','cancelled'].includes(result.status))checkoutKey=crypto.randomUUID();
     $('#payment-dialog').close();
@@ -215,6 +216,16 @@ async function showPaymentStatus(paymentId){
   }catch{failed();}
 }
 
+function renderOrderPayment(payment){
+  if(payment?.outcome!=='pending_payment')return '';
+  const ticket=typeof payment.ticketUrl==='string'&&/^https:\/\//i.test(payment.ticketUrl)?payment.ticketUrl:null;
+  const qr=typeof payment.qrCodeBase64==='string'&&/^[A-Za-z0-9+/=]+$/.test(payment.qrCodeBase64)?payment.qrCodeBase64:null;
+  return `${qr?`<img class="receipt-qr" src="data:image/png;base64,${qr}" alt="QR Code Pix">`:''}`+
+    `${payment.qrCode?`<label>Pix copia e cola<input readonly value="${esc(payment.qrCode)}"></label>`:''}`+
+    `${typeof payment.barcode==='string'?`<label>Código de barras<input readonly value="${esc(payment.barcode)}"></label>`:''}`+
+    `${ticket?`<a class="button primary full" href="${esc(ticket)}" target="_blank" rel="noopener noreferrer">${payment.method==='ticket'?'Abrir boleto':'Abrir instruções de pagamento'}</a>`:''}`;
+}
+
 async function receipt(id,key){
   try{
     const {order:o}=await api(`/api/orders/${encodeURIComponent(id)}?key=${encodeURIComponent(key)}`);
@@ -223,6 +234,7 @@ async function receipt(id,key){
       creating:'Estamos verificando o pagamento. Atualize o status antes de tentar pagar novamente.'}[o.status]||'O pagamento será confirmado pelo Mercado Pago.';
     $('#receipt-content').innerHTML=`${icon(o.status==='paid'?'heart':'shield')}<h2 id="receipt-title">${o.status==='paid'?'Seu carinho está a caminho!':'Acompanhe seu pedido'}</h2><span class="receipt-status">${esc(statusLabels[o.status]||o.status)}</span><p>Pedido ${esc(o.id.slice(0,8).toUpperCase())}<br>${message}</p>${o.items.map(i=>`<div class="summary-line"><span>${i.quantity} × ${esc(i.name)}</span><span>${money(i.price*i.quantity)}</span></div>`).join('')}<div class="summary-line total"><strong>Total</strong><strong>${money(o.total)}</strong></div>${o.paymentId?'<div id="payment-status-fields" role="status">Carregando instruções de pagamento…</div>':''}<button class="button secondary full" id="refresh-order">Atualizar status</button>${o.status==='pending'&&o.checkoutUrl?`<a class="button primary full" href="${esc(o.checkoutUrl)}">Retomar pagamento ${icon('arrow')}</a>`:''}`;
     $('#refresh-order').onclick=()=>receipt(id,key);
+    if(o.payment)$('#refresh-order').insertAdjacentHTML('beforebegin',renderOrderPayment(o.payment));
     if(!$('#receipt-dialog').open)$('#receipt-dialog').showModal();
     if(o.paymentId)await showPaymentStatus(o.paymentId);
     if(['paid','cancelled','rejected','refunded','charged_back'].includes(o.status)&&savedReceipt()?.id===id){

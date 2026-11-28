@@ -19,7 +19,7 @@ test('Checkout Transparente processa cartão, Pix e boleto, com valor da loja e 
 
   const origin = 'https://loja.example';
   const paymentCalls = [];
-  let payment, providerStatus = 'pending';
+  let payment, providerOrder, providerStatus = 'pending';
   const app = await createApp({
     store, baseUrl: origin, quiet: true, adminPassword: 'senha-forte-de-teste',
     accessToken: 'hosted-token', webhookSecret: 'hosted-secret',
@@ -32,6 +32,18 @@ test('Checkout Transparente processa cartão, Pix e boleto, com valor da loja e 
         {id: 'pix', payment_type_id: 'bank_transfer', status: 'active', min_allowed_amount: 1},
         {id: 'bolbradesco', payment_type_id: 'ticket', status: 'active', min_allowed_amount: 5},
       ]);
+      if (url.endsWith('/v1/orders/ORD-test')) return Response.json(providerOrder);
+      if (url.endsWith('/v1/orders') && init.method === 'POST') {
+        const sent = JSON.parse(init.body);
+        assert.equal(init.headers['X-Idempotency-Key'], sent.external_reference);
+        assert.equal(sent.total_amount, '9.50');
+        assert.equal(sent.config.location.state_id, 'BR-CE');
+        assert.deepEqual(sent.transactions.payments[0].payment_method, {id: 'boleto', type: 'ticket'});
+        providerOrder = {id: 'ORD-test', external_reference: sent.external_reference, total_amount: sent.total_amount,
+          status: 'action_required', status_detail: 'waiting_payment', transactions: {payments: [{id: 'PAY-test',
+            payment_method: {id: 'boleto', type: 'ticket', ticket_url: 'https://example.com/ticket', barcode: '123'}}]}};
+        return Response.json(providerOrder, {status: 201});
+      }
       if (url.endsWith('/v1/payments') && init.method === 'POST') {
         const sent = JSON.parse(init.body);
         paymentCalls.push({sent, idempotency: init.headers['X-Idempotency-Key']});
@@ -148,4 +160,38 @@ test('Checkout Transparente processa cartão, Pix e boleto, com valor da loja e 
   assert.equal(secondAttempt.id, firstAttempt.id);
   assert.equal(paymentCalls.length, 5);
   assert.equal((await store.read()).products[0].stock, 0);
+
+  await store.update(state => { state.products[0].stock = 1; });
+  const ordersInput = {...boleto, key: randomUUID()};
+  const ordersResponse = await post('/api/checkout/order', ordersInput);
+  assert.equal(ordersResponse.status, 201);
+  const createdOrder = await ordersResponse.json();
+  assert.equal(createdOrder.order.outcome, 'pending_payment');
+  assert.equal(createdOrder.order.barcode, '123');
+  assert.equal(createdOrder.order.raw, undefined);
+  const replay = await (await post('/api/checkout/order', ordersInput)).json();
+  assert.equal(replay.id, createdOrder.id);
+  assert.equal((await store.read()).products[0].stock, 0);
+  const receiptUrl = `${base}/api/orders/${createdOrder.id}?key=${createdOrder.receiptToken}`;
+  assert.equal((await (await fetch(receiptUrl)).json()).order.payment.ticketUrl, 'https://example.com/ticket');
+
+  const notifyOrder = secret => {
+    const ts = String(Date.now());
+    const digest = createHmac('sha256', secret).update(`id:ord-test;request-id:ord-event;ts:${ts};`).digest('hex');
+    return fetch(`${base}/api/payments/orders-webhook?data.id=ORD-test&type=order`, {
+      method: 'POST', headers: {'Content-Type': 'application/json', 'x-request-id': 'ord-event', 'x-signature': `ts=${ts},v1=${digest}`},
+      body: JSON.stringify({type: 'order', data: {id: 'ORD-test'}})
+    });
+  };
+  assert.equal((await notifyOrder('wrong-secret')).status, 401);
+  providerOrder.status = 'processed';
+  providerOrder.status_detail = 'accredited';
+  assert.equal((await notifyOrder('checkout-secret')).status, 200);
+  assert.equal((await notifyOrder('checkout-secret')).status, 200);
+  providerOrder.status = 'action_required';
+  providerOrder.status_detail = 'waiting_payment';
+  assert.equal((await notifyOrder('checkout-secret')).status, 200);
+  const paid = (await (await fetch(receiptUrl)).json()).order;
+  assert.equal(paid.status, 'paid');
+  assert.equal(paid.payment, undefined);
 });

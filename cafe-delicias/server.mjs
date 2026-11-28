@@ -8,12 +8,15 @@ import {BlobStore} from './lib/blob-store.mjs';
 import {ShopError,text,validateProduct,quote,customerInput,categories} from './lib/shop.mjs';
 import {orderReport,orderReceipt} from './lib/order-reports.mjs';
 import {paymentType,supportsAmount,transparentPaymentInput} from './lib/transparent-payment.mjs';
+import {checkoutOrderPayment,createCheckoutOrder} from './lib/checkout-controller.mjs';
+import {normalizeMercadoPagoOrder} from './lib/mercado-pago-orders.mjs';
 
 const root=dirname(fileURLToPath(import.meta.url));
 const secureEqual=(a,b)=>typeof a==='string'&&typeof b==='string'&&Buffer.byteLength(a)===Buffer.byteLength(b)&&timingSafeEqual(Buffer.from(a),Buffer.from(b));
 const hash=(p,s)=>scryptSync(p,s,64).toString('hex');
 const publicOrder=o=>({id:o.id,createdAt:o.createdAt,status:o.status,fulfillment:o.fulfillment,items:o.items,subtotal:o.subtotal,deliveryFee:o.deliveryFee,total:o.total,method:o.method,checkoutUrl:o.checkoutUrl||null,
-  ...(o.transparentCheckout&&o.status==='pending'&&o.paymentId&&['pix','boleto'].includes(o.method)?{paymentId:o.paymentId}:{})});
+  ...(o.status==='pending'&&o.ordersPayment?{payment:o.ordersPayment}:{}),
+  ...(o.transparentCheckout&&!o.ordersApi&&o.status==='pending'&&o.paymentId&&['pix','boleto'].includes(o.method)?{paymentId:o.paymentId}:{})});
 const checkoutReceipt=o=>({id:o.id,receiptToken:o.receiptToken,status:o.status});
 const paymentStatuses={approved:'paid',refunded:'refunded',charged_back:'charged_back',cancelled:'cancelled',rejected:'rejected',pending:'pending',in_process:'pending',authorized:'pending',in_mediation:'in_mediation'};
 const shopCsp="default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'";
@@ -90,7 +93,7 @@ export async function createApp(options={}) {
   async function recordPayment(p,transparent=false) {
     return store.update(s=>{
       const o=s.orders.find(o=>o.id===p.external_reference);
-      if(!o||Boolean(o.transparentCheckout)!==transparent)return;
+      if(!o||o.ordersApi||Boolean(o.transparentCheckout)!==transparent)return;
       if(p.currency_id!=='BRL'||Math.round(Number(p.transaction_amount)*100)!==o.total) throw new ShopError('Valor do pagamento não corresponde ao pedido.',409);
       if(transparent&&p.payment_type_id!==paymentType(o.method))throw new ShopError('Meio de pagamento não corresponde ao pedido.',409);
       if(['paid','refunded','charged_back'].includes(o.status)&&o.paymentId&&String(o.paymentId)!==String(p.id))return o;
@@ -115,20 +118,44 @@ export async function createApp(options={}) {
     const payment=await mp(`/v1/payments/${encodeURIComponent(paymentId)}`,{},transparent);
     return recordPayment(payment,transparent);
   }
-  async function reserveCheckout(b,customer,{transparent=false,expectedTotal}={}) {
+  async function recordOrdersPayment(id,payment) {
+    return store.update(state=>{
+      const order=state.orders.find(saved=>saved.ordersApi&&saved.id===id);
+      if(!order||order.stockReleased)return order;
+      if(order.ordersPayment&&order.ordersPayment.orderId!==payment.orderId)throw new ShopError('Pedido do Mercado Pago divergente.',409);
+      const next=({approved:'paid',rejected:'rejected',canceled:'cancelled',refunded:'refunded',charged_back:'charged_back'})[payment.outcome]??'pending';
+      if(['paid','refunded','charged_back'].includes(order.status)&&!['refunded','charged_back'].includes(next))return order;
+      order.ordersPayment=payment;
+      order.paymentId=String(payment.paymentId);
+      order.paymentType=payment.method;
+      order.status=next;
+      order.updatedAt=new Date().toISOString();
+      if(['rejected','cancelled'].includes(next))releasePaymentStock(state,order);
+      return order;
+    });
+  }
+  async function reconcileOrder(providerId) {
+    const raw=await mp(`/v1/orders/${encodeURIComponent(providerId)}`,{},true);
+    if(raw.id!==providerId)throw new ShopError('Pedido do Mercado Pago divergente.',502);
+    const order=(await store.read()).orders.find(saved=>saved.ordersApi&&saved.id===raw.external_reference);
+    if(!order||!raw.transactions?.payments?.length)return;
+    return recordOrdersPayment(order.id,checkoutOrderPayment(normalizeMercadoPagoOrder(raw),order));
+  }
+  async function reserveCheckout(b,customer,{transparent=false,expectedTotal,ordersApi=false}={}) {
     const fingerprint=createHash('sha256').update(JSON.stringify({items:b.items,fulfillment:b.fulfillment,method:b.method,customer})).digest('hex');
     return store.update(s=>{
       checkoutAvailable(s);
       const previous=s.orders.find(o=>o.key===b.key);
       if(previous){
-        if(previous.fingerprint!==fingerprint||Boolean(previous.transparentCheckout)!==transparent||
+        if(previous.fingerprint!==fingerprint||Boolean(previous.transparentCheckout)!==transparent||Boolean(previous.ordersApi)!==ordersApi||
             (transparent&&previous.total!==expectedTotal))throw new ShopError('Seu pedido foi alterado. Atualize a sacola.',409);
         return {order:previous,created:false};
       }
       const q=quote(s,b);
       if(transparent&&q.total!==expectedTotal)throw new ShopError('O valor do pedido mudou. Volte para conferir o total.',409);
       const order={...q,id:randomUUID(),key:b.key,fingerprint,receiptToken:randomBytes(24).toString('hex'),customer,
-        fulfillment:b.fulfillment,method:b.method,status:'creating',createdAt:new Date().toISOString(),...(transparent?{transparentCheckout:true}:{})};
+        fulfillment:b.fulfillment,method:b.method,status:'creating',createdAt:new Date().toISOString(),...(transparent?{transparentCheckout:true}:{}),
+        ...(ordersApi?{ordersApi:true}:{})};
       for(const item of q.items)s.products.find(p=>p.id===item.id).stock-=item.quantity;
       s.orders.unshift(order);
       return {order,created:true};
@@ -169,7 +196,8 @@ export async function createApp(options={}) {
     try {
       const url=new URL(req.url,'http://localhost'),path=url.pathname;
       const transparentWebhook=path==='/api/payments/transparent-webhook';
-      const webhook=transparentWebhook||path==='/api/payments/webhook';
+      const ordersWebhook=path==='/api/payments/orders-webhook';
+      const webhook=ordersWebhook||transparentWebhook||path==='/api/payments/webhook';
       if(path==='/'&&transparentReady())res.setHeader('Content-Security-Policy',paymentCsp);
       const client=serverless?String(req.headers['x-vercel-forwarded-for']||req.headers['x-forwarded-for']||'unknown').split(',')[0].trim():req.socket.remoteAddress,now=Date.now();
       if(requestLimits.size>10000)requestLimits.clear();
@@ -206,7 +234,8 @@ export async function createApp(options={}) {
       if(path==='/api/logout'&&req.method==='POST'){if(tokenHash)await store.update(s=>{delete s.sessions?.[tokenHash];});res.setHeader('Set-Cookie','delicias_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0');return json({ok:true});}
       if(path==='/api/catalog'&&req.method==='GET'){
         const s=await store.read();return json({products:s.products.filter(p=>p.active),settings:s.settings,categories,
-          paymentsReady:ready()||transparentReady(),paymentPublicKey:transparentReady()?config.transparentPublicKey:null});
+          paymentsReady:ready()||transparentReady(),paymentPublicKey:transparentReady()?config.transparentPublicKey:null,
+          ordersCheckout:transparentReady()&&(process.env.MP_ORDERS_CHECKOUT??(process.env.VERCEL_ENV==='preview'&&process.env.VERCEL_GIT_COMMIT_REF==='teste-mercado-pago'?'true':'false'))==='true'});
       }
       if(path==='/api/admin/products'){
         if(req.method==='GET')return json({products:(await store.read()).products,categories});
@@ -258,6 +287,11 @@ export async function createApp(options={}) {
         const o=(await store.read()).orders.find(o=>o.id===syncMatch[1]);if(!o)throw new ShopError('Pedido não encontrado.',404);
         const transparent=Boolean(o.transparentCheckout);
         if(transparent&&!transparentWebhookReady())throw new ShopError('A consulta de pagamentos não está configurada.',503);
+        if(o.ordersApi){
+          if(!o.ordersPayment?.orderId)throw new ShopError('Aguardando identificação do pedido pelo Mercado Pago.',409);
+          await reconcileOrder(o.ordersPayment.orderId);
+          return json({ok:true});
+        }
         const payments=await mp(`/v1/payments/search?external_reference=${encodeURIComponent(o.id)}&sort=date_created&criteria=desc`,{},transparent);
         // Process the approved attempt first when multiple attempts exist.
         const list=[...(payments.results||[])].sort((a,b)=>(b.status==='approved')-(a.status==='approved'));
@@ -266,7 +300,8 @@ export async function createApp(options={}) {
       if(path==='/api/admin/backup'&&req.method==='GET'){
         const {admin,sessions,loginAttempts,...data}=await store.read();res.setHeader('Content-Disposition','attachment; filename="backup-delicias.json"');return json(data);
       }
-      if((path==='/api/checkout/transparent/quote'||path==='/api/checkout/transparent')&&req.method==='POST'){
+      const ordersApi=path==='/api/checkout/order';
+      if((path==='/api/checkout/transparent/quote'||path==='/api/checkout/transparent'||ordersApi)&&req.method==='POST'){
         if(!transparentReady())throw new ShopError('O checkout na loja ainda não está disponível.',503);
         const b=await body(req,20000);
         if(!paymentType(b?.method))throw new ShopError('Selecione o pagamento.');
@@ -281,15 +316,23 @@ export async function createApp(options={}) {
           return json({total,paymentMethodIds:accepted.map(method=>method.id)});
         }
 
-        const {expectedTotal}=b;
+        const expectedTotal=b.expectedTotal??(ordersApi?b.total:undefined);
         if(!Number.isSafeInteger(expectedTotal)||expectedTotal<1)throw new ShopError('Confira o total do pedido.');
-        const paymentInput=transparentPaymentInput(b.payment,b.method,customer);
+        const form=ordersApi?(b.form??b.payment):b.payment;
+        if(ordersApi&&b.stateId!==undefined&&(typeof b.stateId!=='string'||!/^BR-[A-Z]{2}$/.test(b.stateId)))throw new ShopError('Informe um estado válido para o pagamento.');
+        const paymentInput=transparentPaymentInput(form,b.method,customer);
         const eligible=await acceptedPaymentMethods(b.method,expectedTotal);
         if(!eligible.some(type=>type.id===paymentInput.payment_method_id))throw new ShopError('Este meio de pagamento não está disponível para o pedido.');
-        const {order,created}=await reserveCheckout(b,customer,{transparent:true,expectedTotal});
-        if(!created)return json(checkoutReceipt(order));
+        const {order,created}=await reserveCheckout(b,customer,{transparent:true,expectedTotal,ordersApi});
+        const receipt=current=>ordersApi?{ok:true,...checkoutReceipt(current),order:current.ordersPayment??null}:checkoutReceipt(current);
+        if(!created)return json(receipt(order));
 
         try {
+          if(ordersApi){
+            const payment=await createCheckoutOrder({form,order,stateId:b.stateId},{accessToken:config.transparentAccessToken,paymentFetch:options.paymentFetch});
+            const updated=await recordOrdersPayment(order.id,payment);
+            return json(receipt(updated),201);
+          }
           const payment=await mp('/v1/payments',{
             method:'POST',headers:{'X-Idempotency-Key':order.id},body:JSON.stringify({
               ...paymentInput,transaction_amount:order.total/100,description:'Dois Amores Doceria',
@@ -303,7 +346,7 @@ export async function createApp(options={}) {
           // Keep its reservation and let the webhook or admin reconcile the attempt.
           if(![400,401,403,422].includes(error.providerStatus)){
             if(!options.quiet)console.warn('Pagamento aguardando conciliação', {orderId:order.id, status:error.providerStatus});
-            return json(checkoutReceipt(order));
+            return json(receipt(order),ordersApi?202:200);
           }
           const rejected=await store.update(state=>{
             const currentOrder=state.orders.find(saved=>saved.id===order.id);
@@ -314,7 +357,7 @@ export async function createApp(options={}) {
             }
             return currentOrder;
           });
-          return json(checkoutReceipt(rejected));
+          return json(receipt(rejected));
         }
       }
       if(path==='/api/checkout'&&req.method==='POST'){
@@ -353,14 +396,18 @@ export async function createApp(options={}) {
         }
       }
       if(webhook&&req.method==='POST'){
-        if(!(transparentWebhook?transparentWebhookReady():ready()))throw new ShopError('Pagamentos não configurados.',503);
-        const b=await body(req,20000);if(b.type!=='payment')return json({received:true});
+        if(!((ordersWebhook||transparentWebhook)?transparentWebhookReady():ready()))throw new ShopError('Pagamentos não configurados.',503);
+        const b=await body(req,20000);if(b.type!==(ordersWebhook?'order':'payment'))return json({received:true});
         const id=url.searchParams.get('data.id');const parts=Object.fromEntries(String(req.headers['x-signature']||'').split(',').map(p=>p.trim().split('=')));
-        const requestId=req.headers['x-request-id'];if(!id||!requestId||!parts.ts||!/^\d+$/.test(parts.ts)||!/^\d+$/.test(id))throw new ShopError('Assinatura inválida.',401);
-        const secret=transparentWebhook?config.transparentWebhookSecret:config.webhookSecret;
+        const requestId=req.headers['x-request-id'];
+        const idPattern=ordersWebhook?/^ORD[A-Z0-9-]{1,64}$/i:/^\d+$/;
+        if(!id||!requestId||!parts.ts||!/^\d+$/.test(parts.ts)||!idPattern.test(id))throw new ShopError('Assinatura inválida.',401);
+        const secret=ordersWebhook||transparentWebhook?config.transparentWebhookSecret:config.webhookSecret;
         const signature=createHmac('sha256',secret).update(`id:${id.toLowerCase()};request-id:${requestId};ts:${parts.ts};`).digest('hex');
         if(!secureEqual(signature,parts.v1))throw new ShopError('Assinatura inválida.',401);
-        await reconcile(id,transparentWebhook);return json({received:true});
+        if(ordersWebhook)await reconcileOrder(id);
+        else await reconcile(id,transparentWebhook);
+        return json({received:true});
       }
       const orderMatch=path.match(/^\/api\/orders\/([a-f0-9-]+)$/);
       if(orderMatch&&req.method==='GET'){

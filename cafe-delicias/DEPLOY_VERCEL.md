@@ -18,6 +18,8 @@ O usuário padrão é `admin`. Para personalizá-lo, defina `ADMIN_USERNAME` em 
 
 Outra opção é definir `ADMIN_PASSWORD` nas variáveis privadas da Vercel e fazer um novo deploy. A senha precisa ter pelo menos 12 caracteres. A troca invalida as sessões anteriores. Nunca coloque a senha em `.env.example`, no código ou no repositório.
 
+Para adicionar contas, defina `ADMIN_ACCOUNTS` como variável privada em Production e faça um novo deploy com o código atualizado. O valor é um objeto JSON no formato `{"usuario":"senha-de-exemplo"}`. Cada senha deve ter de 12 a 200 caracteres. Para remover uma conta, retire sua entrada do JSON e faça um novo deploy.
+
 As sessões administrativas e a contagem de tentativas de login são persistidas no armazenamento compartilhado. Os tokens de sessão são salvos apenas em forma de hash e excluídos dos backups exportados.
 
 ## Pagamentos
@@ -27,6 +29,8 @@ Configure `MP_ACCESS_TOKEN`, `MP_WEBHOOK_SECRET` e `PUBLIC_BASE_URL` em Producti
 Para abrir crédito, débito, Pix e boleto dentro da loja, configure `MP_TRANSPARENT_PUBLIC_KEY`, `MP_TRANSPARENT_ACCESS_TOKEN` e `MP_TRANSPARENT_WEBHOOK_SECRET` da aplicação Mercado Pago com Checkout Bricks (Payments API). Use as credenciais de teste e a URL HTTPS do deploy em Preview para homologar. Use as credenciais produtivas da aplicação em Production. Armazene o Access Token e a assinatura como segredos na Vercel.
 
 Cadastre o evento **Pagamentos (legacy)** em `/api/payments/transparent-webhook` na aplicação do Checkout Transparente. Preserve a URL e as credenciais do Checkout Pro para conciliar pedidos já iniciados por ele. Cadastre também uma chave Pix na conta vendedora. Os cartões de débito e os limites de valor dependem dos meios habilitados pelo Mercado Pago para a conta.
+
+Para habilitar a Orders API na interface, defina `MP_ORDERS_CHECKOUT=true` no ambiente escolhido e faça um novo deploy. Cadastre o tópico **Order (Mercado Pago)** apontando para `/api/payments/orders-webhook` no domínio desse ambiente. Use a assinatura desse ambiente em `MP_TRANSPARENT_WEBHOOK_SECRET` e homologue a entrega assinada e a atualização do pedido no Preview antes de habilitar a configuração em Production. Mantenha as notificações dos pedidos antigos ativas durante a transição.
 
 O catálogo de exemplo bloqueia cobranças mesmo com credenciais. Substitua produtos, fotos, alergênicos, estoque e dados comerciais antes de desativar a demonstração no painel. Homologue as quatro modalidades com a conta Mercado Pago antes de vender.
 
